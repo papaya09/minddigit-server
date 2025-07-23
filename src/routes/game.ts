@@ -1,21 +1,33 @@
 import express from 'express';
-import Game from '../models/Game';
-import Player from '../models/Player';
-import Move from '../models/Move';
 import { generateRoomCode } from '../utils/gameUtils';
 
 const router = express.Router();
 
+// In-memory storage for quick gameplay
+interface InMemoryGame {
+  code: string;
+  digits: number;
+  state: 'waiting' | 'active' | 'finished';
+  winner?: string;
+  startedAt?: Date;
+  createdAt: Date;
+}
+
+interface InMemoryPlayer {
+  name: string;
+  avatar: string;
+  secret?: string;
+  gameId: string;
+  isReady: boolean;
+  createdAt: Date;
+}
+
+const games = new Map<string, InMemoryGame>();
+const players = new Map<string, InMemoryPlayer[]>();
+
 // Create new game room with player
 router.post('/rooms', async (req, res) => {
   try {
-    // Check if database is connected
-    if (!process.env.MONGODB_URI) {
-      return res.status(503).json({ 
-        message: 'Database not configured. Please contact administrator.' 
-      });
-    }
-    
     const { playerName, avatar, gameMode = 'classic', digits = 4 } = req.body;
     
     if (!playerName) {
@@ -25,26 +37,29 @@ router.post('/rooms', async (req, res) => {
     let code = generateRoomCode();
     
     // Ensure unique room code
-    while (await Game.findOne({ code })) {
+    while (games.has(code)) {
       code = generateRoomCode();
     }
     
     // Create game
-    const game = new Game({ 
+    const game: InMemoryGame = { 
       code, 
       digits, 
-      state: 'waiting'
-    });
-    await game.save();
+      state: 'waiting',
+      createdAt: new Date()
+    };
+    games.set(code, game);
     
     // Create host player
-    const player = new Player({
+    const player: InMemoryPlayer = {
       name: playerName,
       avatar: avatar || '🎯',
-      gameId: game._id,
-      isReady: false
-    });
-    await player.save();
+      gameId: code,
+      isReady: false,
+      createdAt: new Date()
+    };
+    
+    players.set(code, [player]);
     
     res.json({ 
       roomCode: code,
@@ -52,23 +67,7 @@ router.post('/rooms', async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating room:', error);
-    
-    // More detailed error for debugging
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    if (error instanceof Error) {
-      console.error('Error details:', error.message, error.stack);
-      
-      if (error.message.includes('buffering timed out')) {
-        return res.status(500).json({ 
-          message: 'Database connection failed. Please check MongoDB setup.' 
-        });
-      }
-    }
-    
-    res.status(500).json({ 
-      message: 'Failed to create room', 
-      error: process.env.NODE_ENV === 'development' ? errorMessage : undefined 
-    });
+    res.status(500).json({ message: 'Failed to create room' });
   }
 });
 
@@ -81,7 +80,7 @@ router.post('/rooms/join', async (req, res) => {
       return res.status(400).json({ message: 'Room code and player name are required' });
     }
     
-    const game = await Game.findOne({ code: roomCode });
+    const game = games.get(roomCode);
     if (!game) {
       return res.status(404).json({ message: 'Room not found' });
     }
@@ -90,31 +89,30 @@ router.post('/rooms/join', async (req, res) => {
       return res.status(400).json({ message: 'Game has already started' });
     }
     
-    // Check if player already exists
-    const existingPlayer = await Player.findOne({ 
-      gameId: game._id, 
-      name: playerName 
-    });
+    const roomPlayers = players.get(roomCode) || [];
     
+    // Check if player already exists
+    const existingPlayer = roomPlayers.find(p => p.name === playerName);
     if (existingPlayer) {
       return res.status(400).json({ message: 'Player name already taken in this room' });
     }
     
     // Check room capacity (max 4 players)
-    const playerCount = await Player.countDocuments({ gameId: game._id });
-    if (playerCount >= 4) {
+    if (roomPlayers.length >= 4) {
       return res.status(400).json({ message: 'Room is full' });
     }
     
     // Create player
-    const player = new Player({
+    const player: InMemoryPlayer = {
       name: playerName,
       avatar: avatar || '🎯',
-      gameId: game._id,
-      isHost: false,
-      isReady: false
-    });
-    await player.save();
+      gameId: roomCode,
+      isReady: false,
+      createdAt: new Date()
+    };
+    
+    roomPlayers.push(player);
+    players.set(roomCode, roomPlayers);
     
     res.json({ 
       message: 'Joined room successfully'
@@ -128,26 +126,26 @@ router.post('/rooms/join', async (req, res) => {
 // Get all available rooms
 router.get('/rooms', async (req, res) => {
   try {
-    const games = await Game.find({ 
-      state: { $in: ['waiting', 'active'] } 
-    }).sort({ createdAt: -1 }).limit(20);
+    const roomList = Array.from(games.values())
+      .filter(game => ['waiting', 'active'].includes(game.state))
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, 20)
+      .map(game => {
+        const roomPlayers = players.get(game.code) || [];
+        const host = roomPlayers[0];
+        
+        return {
+          code: game.code,
+          hostName: host?.name || 'Unknown',
+          hostAvatar: host?.avatar || '🎯',
+          gameMode: 'classic',
+          playerCount: roomPlayers.length,
+          maxPlayers: 4,
+          isGameStarted: game.state === 'active'
+        };
+      });
     
-    const rooms = await Promise.all(games.map(async (game) => {
-      const players = await Player.find({ gameId: game._id });
-      const host = players[0]; // First player is considered host
-      
-      return {
-        code: game.code,
-        hostName: host?.name || 'Unknown',
-        hostAvatar: host?.avatar || '🎯',
-        gameMode: 'classic', // Default game mode
-        playerCount: players.length,
-        maxPlayers: 4,
-        isGameStarted: game.state === 'active'
-      };
-    }));
-    
-    res.json({ rooms });
+    res.json({ rooms: roomList });
   } catch (error) {
     console.error('Error getting room list:', error);
     res.status(500).json({ message: 'Failed to get room list' });
@@ -159,12 +157,16 @@ router.get('/rooms/:code/state', async (req, res) => {
   try {
     const { code } = req.params;
     
-    const game = await Game.findOne({ code });
+    const game = games.get(code);
     if (!game) {
       return res.status(404).json({ message: 'Room not found' });
     }
     
-    const players = await Player.find({ gameId: game._id }).select('-secret');
+    const roomPlayers = (players.get(code) || []).map(p => ({
+      name: p.name,
+      avatar: p.avatar,
+      isReady: p.isReady
+    }));
     
     const roomState = {
       game: {
@@ -172,11 +174,7 @@ router.get('/rooms/:code/state', async (req, res) => {
         state: game.state,
         digits: game.digits
       },
-      players: players.map(p => ({
-        name: p.name,
-        avatar: p.avatar,
-        isReady: p.isReady
-      }))
+      players: roomPlayers
     };
     
     res.json(roomState);
@@ -204,26 +202,28 @@ router.post('/rooms/secret', async (req, res) => {
       return res.status(400).json({ message: 'Secret must have unique digits' });
     }
     
-    const game = await Game.findOne({ code: roomCode });
+    const game = games.get(roomCode);
     if (!game) {
       return res.status(404).json({ message: 'Room not found' });
     }
     
-    // For simplicity, we'll assume the first player to set secret becomes ready
-    const player = await Player.findOne({ gameId: game._id });
+    const roomPlayers = players.get(roomCode) || [];
+    // For simplicity, set secret for first player who doesn't have one
+    const player = roomPlayers.find(p => !p.secret);
     if (player) {
       player.secret = secret;
       player.isReady = true;
-      await player.save();
       
       // Check if all players are ready to start game
-      const allPlayers = await Player.find({ gameId: game._id });
-      const readyPlayers = allPlayers.filter(p => p.isReady);
+      const readyPlayers = roomPlayers.filter(p => p.isReady);
       
-      if (readyPlayers.length >= 2 && readyPlayers.length === allPlayers.length) {
+      if (readyPlayers.length >= 2 && readyPlayers.length === roomPlayers.length) {
         game.state = 'active';
-        await game.save();
+        game.startedAt = new Date();
+        games.set(roomCode, game);
       }
+      
+      players.set(roomCode, roomPlayers);
     }
     
     res.json({ message: 'Secret set successfully' });
@@ -246,7 +246,7 @@ router.post('/rooms/guess', async (req, res) => {
       return res.status(400).json({ message: 'Guess must be exactly 4 digits' });
     }
     
-    const game = await Game.findOne({ code: roomCode });
+    const game = games.get(roomCode);
     if (!game) {
       return res.status(404).json({ message: 'Room not found' });
     }
@@ -255,32 +255,24 @@ router.post('/rooms/guess', async (req, res) => {
       return res.status(400).json({ message: 'Game is not in progress' });
     }
     
-    const guessingPlayer = await Player.findOne({ 
-      gameId: game._id, 
-      name: playerName 
-    });
+    const roomPlayers = players.get(roomCode) || [];
+    const guessingPlayer = roomPlayers.find(p => p.name === playerName);
     
     if (!guessingPlayer) {
       return res.status(404).json({ message: 'Player not found in this room' });
     }
     
     // Find target player (for simplicity, guess against the first other player)
-    const targetPlayer = await Player.findOne({ 
-      gameId: game._id, 
-      name: { $ne: playerName },
-      secret: { $exists: true, $ne: null }
-    });
+    const targetPlayer = roomPlayers.find(p => 
+      p.name !== playerName && p.secret
+    );
     
-    if (!targetPlayer) {
+    if (!targetPlayer || !targetPlayer.secret) {
       return res.status(400).json({ message: 'No valid target player found' });
     }
     
     // Calculate hit
     const secret = targetPlayer.secret;
-    if (!secret) {
-      return res.status(400).json({ message: 'Target player has no secret set' });
-    }
-    
     let hit = 0;
     
     for (let i = 0; i < 4; i++) {
@@ -289,57 +281,20 @@ router.post('/rooms/guess', async (req, res) => {
       }
     }
     
-    // Save move
-    const move = new Move({
-      gameId: game._id,
-      from: guessingPlayer.name,
-      to: targetPlayer.name,
-      guess: guess,
-      hit: hit
-    });
-    await move.save();
-    
     // Check for win
     if (hit === 4) {
       game.state = 'finished';
-      game.winner = guessingPlayer._id;
-      await game.save();
+      game.winner = guessingPlayer.name;
+      games.set(roomCode, game);
     }
     
     res.json({ 
       hit: hit,
-      message: hit === 4 ? 'Correct! You win!' : `${hit} correct digits in correct positions`
+      message: 'Guess processed successfully'
     });
   } catch (error) {
     console.error('Error making guess:', error);
     res.status(500).json({ message: 'Failed to make guess' });
-  }
-});
-
-// Get room info (legacy endpoint)
-router.get('/rooms/:code', async (req, res) => {
-  try {
-    const { code } = req.params;
-    
-    const game = await Game.findOne({ code });
-    if (!game) {
-      return res.status(404).json({ success: false, error: 'Room not found' });
-    }
-    
-    const players = await Player.find({ gameId: game._id }).select('-secret');
-    
-    res.json({ 
-      success: true, 
-      game: {
-        code: game.code,
-        digits: game.digits,
-        state: game.state,
-        playerCount: players.length
-      },
-      players 
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: 'Failed to get room' });
   }
 });
 

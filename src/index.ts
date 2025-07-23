@@ -4,13 +4,15 @@ dotenv.config();
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import app from './app';
-import connectDB from './config/database';
+// import connectDB from './config/database'; // Disabled for in-memory storage
 import { setupGameEvents } from './socket/gameEvents';
 
 const PORT = process.env.PORT || 3000;
 
-// Connect to MongoDB
-connectDB();
+// Connect to MongoDB - DISABLED for in-memory storage
+// connectDB();
+
+console.log('🎮 MindDigits Server starting with in-memory storage...');
 
 // Export app for Vercel
 export default app;
