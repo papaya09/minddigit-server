@@ -489,4 +489,37 @@ router.get('/rooms/:code/moves', async (req, res) => {
   }
 });
 
+// Delete room endpoint
+router.delete('/rooms/:code', async (req, res) => {
+  try {
+    await ensureConnection();
+    
+    const { code } = req.params;
+    
+    console.log(`🗑️ Delete room request for: ${code}`);
+    
+    const game = await Game.findOne({ code, isActive: true });
+    if (!game) {
+      return res.status(404).json({ message: 'Room not found' });
+    }
+    
+    // Mark game as inactive instead of deleting
+    game.isActive = false;
+    await game.save();
+    
+    // Mark all players as disconnected
+    await Player.updateMany(
+      { gameId: game._id },
+      { isConnected: false }
+    );
+    
+    console.log(`✅ Room ${code} deleted successfully`);
+    
+    res.json({ message: 'Room deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting room:', error);
+    res.status(500).json({ message: 'Failed to delete room' });
+  }
+});
+
 export default router;
