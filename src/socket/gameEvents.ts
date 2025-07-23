@@ -166,6 +166,34 @@ export const setupGameEvents = (io: Server, socket: Socket) => {
     }
   });
   
+  // Get available rooms list
+  socket.on('getRoomList', async () => {
+    try {
+      const games = await Game.find({ state: { $in: ['waiting', 'active'] } })
+        .sort({ createdAt: -1 })
+        .limit(20);
+      
+      const roomList = await Promise.all(games.map(async (game) => {
+        const players = await Player.find({ gameId: game._id }).select('name avatar');
+        const hostPlayer = players[0];
+        
+        return {
+          code: game.code,
+          hostName: hostPlayer?.name || 'Unknown',
+          hostAvatar: hostPlayer?.avatar || '🎯',
+          gameMode: `${game.digits}D`,
+          playerCount: players.length,
+          maxPlayers: 4,
+          isGameStarted: game.state === 'active'
+        };
+      }));
+      
+      socket.emit('roomList', roomList);
+    } catch (error) {
+      socket.emit('error', { message: 'Failed to get room list' });
+    }
+  });
+
   socket.on('disconnect', () => {
     console.log('Player disconnected:', socket.id);
   });

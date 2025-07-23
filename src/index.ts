@@ -15,12 +15,16 @@ connectDB();
 // Create HTTP server
 const server = createServer(app);
 
-// Setup Socket.IO
+// Setup Socket.IO with improved CORS for Vercel
 const io = new Server(server, {
   cors: {
-    origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
-    credentials: true
-  }
+    origin: process.env.CORS_ORIGIN || '*',
+    credentials: true,
+    methods: ['GET', 'POST']
+  },
+  transports: ['websocket', 'polling'],
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 // Socket connection handling
