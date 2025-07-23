@@ -107,11 +107,16 @@ router.post('/rooms/join', async (req, res) => {
     // Check existing players
     const existingPlayers = await Player.find({ roomCode, gameId: game._id });
     
-    // Check if player already exists
+    // Check if player already exists - if so, allow rejoin
     const existingPlayer = existingPlayers.find(p => p.name === playerName);
     if (existingPlayer) {
-      console.log(`⚠️ Player ${playerName} already exists in room ${roomCode}`);
-      return res.status(400).json({ message: 'Player name already taken in this room' });
+      console.log(`🔄 Player ${playerName} rejoining room ${roomCode}`);
+      // Mark player as connected again
+      existingPlayer.isConnected = true;
+      await existingPlayer.save();
+      
+      console.log(`✅ Player ${playerName} reconnected to room ${roomCode}`);
+      return res.json({ message: 'Rejoined room successfully' });
     }
     
     // Check room capacity (max 4 players)
@@ -318,6 +323,66 @@ router.post('/rooms/secret', async (req, res) => {
   } catch (error) {
     console.error('Error setting secret:', error);
     res.status(500).json({ message: 'Failed to set secret' });
+  }
+});
+
+// Start game manually
+router.post('/rooms/start', async (req, res) => {
+  try {
+    await ensureConnection();
+    
+    const { roomCode, playerName } = req.body;
+    
+    console.log(`🎮 Start game request for room ${roomCode} from ${playerName}`);
+    
+    if (!roomCode || !playerName) {
+      return res.status(400).json({ message: 'Room code and player name are required' });
+    }
+    
+    const game = await Game.findOne({ code: roomCode, isActive: true });
+    if (!game) {
+      return res.status(404).json({ message: 'Room not found' });
+    }
+    
+    if (game.state !== 'waiting') {
+      return res.status(400).json({ message: 'Game has already started or finished' });
+    }
+    
+    // Check if requesting player is in the room
+    const player = await Player.findOne({ gameId: game._id, name: playerName });
+    if (!player) {
+      return res.status(404).json({ message: 'Player not found in this room' });
+    }
+    
+    // Check if we have at least 2 players
+    const allPlayers = await Player.find({ gameId: game._id });
+    const connectedPlayers = allPlayers.filter(p => p.isConnected !== false);
+    
+    if (connectedPlayers.length < 2) {
+      return res.status(400).json({ message: 'Need at least 2 players to start the game' });
+    }
+    
+    // Check if all connected players are ready (have secrets)
+    const readyPlayers = connectedPlayers.filter(p => p.isReady && p.secret);
+    
+    if (readyPlayers.length !== connectedPlayers.length) {
+      return res.status(400).json({ message: 'All players must set their secrets before starting' });
+    }
+    
+    // Start the game
+    game.state = 'active';
+    game.startedAt = new Date();
+    await game.save();
+    
+    console.log(`🎮 Game ${roomCode} started manually with ${connectedPlayers.length} players`);
+    
+    // Update game activity
+    await updateGameActivity(roomCode);
+    
+    res.json({ message: 'Game started successfully' });
+  } catch (error) {
+    console.error('Error starting game:', error);
+    res.status(500).json({ message: 'Failed to start game' });
   }
 });
 
