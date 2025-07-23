@@ -30,6 +30,8 @@ router.post('/rooms', async (req, res) => {
   try {
     const { playerName, avatar, gameMode = 'classic', digits = 4 } = req.body;
     
+    console.log(`🏠 Create room request from: ${playerName} (${avatar})`);
+    
     if (!playerName) {
       return res.status(400).json({ message: 'Player name is required' });
     }
@@ -40,6 +42,8 @@ router.post('/rooms', async (req, res) => {
     while (games.has(code)) {
       code = generateRoomCode();
     }
+    
+    console.log(`🎲 Generated room code: ${code}`);
     
     // Create game
     const game: InMemoryGame = { 
@@ -61,6 +65,9 @@ router.post('/rooms', async (req, res) => {
     
     players.set(code, [player]);
     
+    console.log(`✅ Room ${code} created successfully with host ${playerName}`);
+    console.log(`📊 Total games: ${games.size}, Total player groups: ${players.size}`);
+    
     res.json({ 
       roomCode: code,
       message: 'Room created successfully'
@@ -76,29 +83,39 @@ router.post('/rooms/join', async (req, res) => {
   try {
     const { roomCode, playerName, avatar } = req.body;
     
+    console.log(`🚪 Join room request: ${playerName} wants to join ${roomCode}`);
+    
     if (!roomCode || !playerName) {
       return res.status(400).json({ message: 'Room code and player name are required' });
     }
     
+    console.log(`📊 Current games: ${games.size}, players: ${players.size}`);
+    console.log(`🔍 Looking for game: ${roomCode}`);
+    
     const game = games.get(roomCode);
     if (!game) {
+      console.log(`❌ Game ${roomCode} not found. Available: ${Array.from(games.keys()).join(', ')}`);
       return res.status(404).json({ message: 'Room not found' });
     }
     
     if (game.state !== 'waiting') {
+      console.log(`⚠️ Game ${roomCode} already started (state: ${game.state})`);
       return res.status(400).json({ message: 'Game has already started' });
     }
     
     const roomPlayers = players.get(roomCode) || [];
+    console.log(`👥 Current players in ${roomCode}: ${roomPlayers.length}`);
     
     // Check if player already exists
     const existingPlayer = roomPlayers.find(p => p.name === playerName);
     if (existingPlayer) {
+      console.log(`⚠️ Player ${playerName} already exists in room ${roomCode}`);
       return res.status(400).json({ message: 'Player name already taken in this room' });
     }
     
     // Check room capacity (max 4 players)
     if (roomPlayers.length >= 4) {
+      console.log(`🚫 Room ${roomCode} is full (${roomPlayers.length}/4)`);
       return res.status(400).json({ message: 'Room is full' });
     }
     
@@ -113,6 +130,8 @@ router.post('/rooms/join', async (req, res) => {
     
     roomPlayers.push(player);
     players.set(roomCode, roomPlayers);
+    
+    console.log(`✅ Player ${playerName} joined room ${roomCode}. Total players: ${roomPlayers.length}`);
     
     res.json({ 
       message: 'Joined room successfully'
@@ -157,12 +176,32 @@ router.get('/rooms/:code/state', async (req, res) => {
   try {
     const { code } = req.params;
     
-    const game = games.get(code);
+    console.log(`🔍 Getting room state for: ${code}`);
+    console.log(`📊 Total games in memory: ${games.size}`);
+    console.log(`📊 Total player groups: ${players.size}`);
+    
+    let game = games.get(code);
+    const roomPlayers = players.get(code) || [];
+    
+    // Auto-recovery: If players exist but game is missing, recreate game
+    if (!game && roomPlayers.length > 0) {
+      console.log(`🔧 Auto-recovery: Game ${code} missing but players exist. Recreating...`);
+      game = {
+        code: code,
+        digits: 4,
+        state: 'waiting',
+        createdAt: new Date()
+      };
+      games.set(code, game);
+      console.log(`✅ Game ${code} recreated successfully`);
+    }
+    
     if (!game) {
+      console.log(`❌ Room ${code} not found. Available rooms: ${Array.from(games.keys()).join(', ')}`);
       return res.status(404).json({ message: 'Room not found' });
     }
     
-    const roomPlayers = (players.get(code) || []).map(p => ({
+    const playerStates = roomPlayers.map(p => ({
       name: p.name,
       avatar: p.avatar,
       isReady: p.isReady
@@ -174,9 +213,10 @@ router.get('/rooms/:code/state', async (req, res) => {
         state: game.state,
         digits: game.digits
       },
-      players: roomPlayers
+      players: playerStates
     };
     
+    console.log(`✅ Room state for ${code}: ${playerStates.length} players, state: ${game.state}`);
     res.json(roomState);
   } catch (error) {
     console.error('Error getting room state:', error);
