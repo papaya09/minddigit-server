@@ -13,6 +13,14 @@ const PORT = process.env.PORT || 3000;
 // connectDB();
 
 console.log('🎮 MindDigits Server starting with in-memory storage...');
+console.log(`🌐 Region: ${process.env.VERCEL_REGION || 'local'}`);
+console.log(`⏰ Instance started at: ${new Date().toISOString()}`);
+
+// Log all incoming requests for debugging
+app.use((req, res, next) => {
+  console.log(`📡 ${req.method} ${req.path} - ${new Date().toLocaleTimeString()}`);
+  next();
+});
 
 // Export app for Vercel
 export default app;

@@ -179,12 +179,39 @@ router.get('/rooms/:code/state', async (req, res) => {
     console.log(`🔍 Getting room state for: ${code}`);
     console.log(`📊 Total games in memory: ${games.size}`);
     console.log(`📊 Total player groups: ${players.size}`);
+    console.log(`🌐 Instance ID: ${process.env.VERCEL_REGION || 'local'}-${Date.now() % 1000}`);
     
     let game = games.get(code);
-    const roomPlayers = players.get(code) || [];
+    let roomPlayers = players.get(code) || [];
     
+    // Enhanced Auto-recovery: Create minimal game/player data if completely missing
+    if (!game && roomPlayers.length === 0) {
+      console.log(`🔧 Cold start detected: No data for room ${code}. Creating minimal recovery data...`);
+      
+      // Create basic game structure
+      game = {
+        code: code,
+        digits: 4,
+        state: 'waiting',
+        createdAt: new Date()
+      };
+      games.set(code, game);
+      
+      // Create placeholder player (will be updated when real players reconnect)
+      const placeholderPlayer: InMemoryPlayer = {
+        name: 'Unknown',
+        avatar: '👤',
+        gameId: code,
+        isReady: false,
+        createdAt: new Date()
+      };
+      roomPlayers = [placeholderPlayer];
+      players.set(code, roomPlayers);
+      
+      console.log(`✅ Recovery: Room ${code} recreated with placeholder data`);
+    }
     // Auto-recovery: If players exist but game is missing, recreate game
-    if (!game && roomPlayers.length > 0) {
+    else if (!game && roomPlayers.length > 0) {
       console.log(`🔧 Auto-recovery: Game ${code} missing but players exist. Recreating...`);
       game = {
         code: code,
