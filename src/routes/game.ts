@@ -522,4 +522,35 @@ router.delete('/rooms/:code', async (req, res) => {
   }
 });
 
+// Delete all rooms endpoint
+router.delete('/rooms', async (req, res) => {
+  try {
+    await ensureConnection();
+    
+    console.log(`🗑️ Delete all rooms request`);
+    
+    // Mark all active games as inactive
+    const result = await Game.updateMany(
+      { isActive: true },
+      { isActive: false }
+    );
+    
+    // Mark all players as disconnected
+    await Player.updateMany(
+      {},
+      { isConnected: false }
+    );
+    
+    console.log(`✅ Deleted ${result.modifiedCount} rooms successfully`);
+    
+    res.json({ 
+      message: `${result.modifiedCount} rooms deleted successfully`,
+      deletedCount: result.modifiedCount
+    });
+  } catch (error) {
+    console.error('Error deleting all rooms:', error);
+    res.status(500).json({ message: 'Failed to delete all rooms' });
+  }
+});
+
 export default router;
