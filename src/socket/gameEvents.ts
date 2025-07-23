@@ -5,14 +5,23 @@ import Move from '../models/Move';
 import { calculateHit, isValidSecret } from '../utils/gameUtils';
 
 export const setupGameEvents = (io: Server, socket: Socket) => {
+  console.log('🔗 New client connected:', socket.id);
   
   // Join game room
   socket.on('joinRoom', async (data: { code: string, playerName: string, avatar?: string }) => {
     try {
+      console.log('🏠 Join room request:', data);
       const { code, playerName, avatar = '🎯' } = data;
+      
+      // Validate input
+      if (!code || !playerName) {
+        socket.emit('error', { message: 'Missing room code or player name' });
+        return;
+      }
       
       const game = await Game.findOne({ code });
       if (!game) {
+        console.log('❌ Room not found:', code);
         socket.emit('error', { message: 'Room not found' });
         return;
       }
@@ -40,6 +49,7 @@ export const setupGameEvents = (io: Server, socket: Socket) => {
       }
       
       socket.join(code);
+      console.log(`✅ Player ${playerName} joined room ${code}`);
       
       // Send room state to all players
       const players = await Player.find({ gameId: game._id }).select('-secret');
@@ -49,6 +59,7 @@ export const setupGameEvents = (io: Server, socket: Socket) => {
       });
       
     } catch (error) {
+      console.error('❌ Error joining room:', error);
       socket.emit('error', { message: 'Failed to join room' });
     }
   });
@@ -194,7 +205,34 @@ export const setupGameEvents = (io: Server, socket: Socket) => {
     }
   });
 
-  socket.on('disconnect', () => {
-    console.log('Player disconnected:', socket.id);
+  socket.on('disconnect', async () => {
+    console.log('⚠️ Player disconnected:', socket.id);
+    
+    try {
+      // Find and update player status
+      const player = await Player.findOne({ socketId: socket.id });
+      if (player) {
+        // Remove socket ID but keep player for potential reconnection
+        player.socketId = undefined;
+        await player.save();
+        
+        // Notify other players in the room
+        const game = await Game.findById(player.gameId);
+        if (game) {
+          const players = await Player.find({ gameId: game._id }).select('-secret');
+          socket.to(game.code).emit('roomState', {
+            game: { code: game.code, state: game.state, digits: game.digits },
+            players
+          });
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error handling disconnect:', error);
+    }
+  });
+  
+  // Handle ping/pong for connection health
+  socket.on('ping', () => {
+    socket.emit('pong');
   });
 };
