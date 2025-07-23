@@ -273,7 +273,9 @@ router.get('/rooms/:code/state', async (req, res) => {
 // Set player secret
 router.post('/rooms/secret', async (req, res) => {
   try {
-    const { roomCode, secret } = req.body;
+    const { roomCode, secret, playerName } = req.body;
+    
+    console.log(`🔐 Set secret request for room ${roomCode} from player ${playerName}`);
     
     if (!roomCode || !secret) {
       return res.status(400).json({ message: 'Room code and secret are required' });
@@ -294,23 +296,46 @@ router.post('/rooms/secret', async (req, res) => {
     }
     
     const roomPlayers = players.get(roomCode) || [];
-    // For simplicity, set secret for first player who doesn't have one
-    const player = roomPlayers.find(p => !p.secret);
-    if (player) {
-      player.secret = secret;
-      player.isReady = true;
-      
-      // Check if all players are ready to start game
-      const readyPlayers = roomPlayers.filter(p => p.isReady);
-      
-      if (readyPlayers.length >= 2 && readyPlayers.length === roomPlayers.length) {
-        game.state = 'active';
-        game.startedAt = new Date();
-        games.set(roomCode, game);
-      }
-      
-      players.set(roomCode, roomPlayers);
+    console.log(`🔍 Looking for player ${playerName}. Current players: ${roomPlayers.map(p => p.name).join(', ')}`);
+    
+    // Find specific player by name
+    const player = roomPlayers.find(p => p.name === playerName);
+    if (!player) {
+      console.log(`❌ Player ${playerName} not found in room ${roomCode}`);
+      return res.status(404).json({ message: 'Player not found in this room' });
     }
+    
+    if (player.secret) {
+      console.log(`⚠️ Player ${playerName} already has a secret set`);
+      return res.status(400).json({ message: 'Secret already set for this player' });
+    }
+    
+    // Set secret for specific player
+    player.secret = secret;
+    player.isReady = true;
+    
+    console.log(`✅ Secret set for player: ${player.name}`);
+    
+    // Check if all players are ready to start game
+    const readyPlayers = roomPlayers.filter(p => p.isReady);
+    console.log(`📊 Ready players: ${readyPlayers.length}/${roomPlayers.length}`);
+    console.log(`👥 Ready list: ${readyPlayers.map(p => p.name).join(', ')}`);
+    
+    if (readyPlayers.length >= 2 && readyPlayers.length === roomPlayers.length) {
+      game.state = 'active';
+      game.startedAt = new Date();
+      
+      // Randomly select first player
+      const randomIndex = Math.floor(Math.random() * readyPlayers.length);
+      const firstPlayer = readyPlayers[randomIndex];
+      console.log(`🎲 Game starting! First player: ${firstPlayer.name}`);
+      
+      games.set(roomCode, game);
+      
+      console.log(`🎮 Game ${roomCode} is now ACTIVE with ${readyPlayers.length} players`);
+    }
+    
+    players.set(roomCode, roomPlayers);
     
     res.json({ message: 'Secret set successfully' });
   } catch (error) {
