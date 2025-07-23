@@ -67,6 +67,13 @@ router.post('/rooms', async (req, res) => {
     
     console.log(`✅ Room ${code} created successfully with host ${playerName}`);
     console.log(`📊 Total games: ${games.size}, Total player groups: ${players.size}`);
+    console.log(`🔐 Game data stored: ${JSON.stringify(game)}`);
+    console.log(`👤 Player data stored: ${JSON.stringify(player)}`);
+    
+    // Verify data is actually stored
+    const verifyGame = games.get(code);
+    const verifyPlayers = players.get(code);
+    console.log(`✅ Verification - Game exists: ${!!verifyGame}, Players exist: ${!!verifyPlayers}, Player count: ${verifyPlayers?.length || 0}`);
     
     res.json({ 
       roomCode: code,
@@ -103,17 +110,21 @@ router.post('/rooms/join', async (req, res) => {
       return res.status(400).json({ message: 'Game has already started' });
     }
     
-    const roomPlayers = players.get(roomCode) || [];
+    let roomPlayers = players.get(roomCode) || [];
     console.log(`👥 Current players in ${roomCode}: ${roomPlayers.length}`);
     
-    // Check if player already exists
+    // Check if player already exists (exclude placeholders)
     const existingPlayer = roomPlayers.find(p => p.name === playerName);
     if (existingPlayer) {
       console.log(`⚠️ Player ${playerName} already exists in room ${roomCode}`);
       return res.status(400).json({ message: 'Player name already taken in this room' });
     }
     
-    // Check room capacity (max 4 players)
+    // Remove placeholder players and check capacity
+    roomPlayers = roomPlayers.filter(p => p.name !== 'Unknown');
+    console.log(`🔧 After removing placeholders: ${roomPlayers.length} real players`);
+    
+    // Check room capacity (max 4 players, excluding placeholders)
     if (roomPlayers.length >= 4) {
       console.log(`🚫 Room ${roomCode} is full (${roomPlayers.length}/4)`);
       return res.status(400).json({ message: 'Room is full' });
@@ -132,6 +143,7 @@ router.post('/rooms/join', async (req, res) => {
     players.set(roomCode, roomPlayers);
     
     console.log(`✅ Player ${playerName} joined room ${roomCode}. Total players: ${roomPlayers.length}`);
+    console.log(`👥 Final player list: ${roomPlayers.map(p => `${p.name}(${p.avatar})`).join(', ')}`);
     
     res.json({ 
       message: 'Joined room successfully'
@@ -228,7 +240,14 @@ router.get('/rooms/:code/state', async (req, res) => {
       return res.status(404).json({ message: 'Room not found' });
     }
     
-    const playerStates = roomPlayers.map(p => ({
+    // Filter out placeholder players if real players exist
+    const realPlayers = roomPlayers.filter(p => p.name !== 'Unknown');
+    const finalPlayers = realPlayers.length > 0 ? realPlayers : roomPlayers;
+    
+    console.log(`👥 Raw players: ${roomPlayers.length}, Real players: ${realPlayers.length}, Final: ${finalPlayers.length}`);
+    console.log(`👥 Final player list: ${finalPlayers.map(p => `${p.name}(${p.avatar})`).join(', ')}`);
+    
+    const playerStates = finalPlayers.map(p => ({
       name: p.name,
       avatar: p.avatar,
       isReady: p.isReady
