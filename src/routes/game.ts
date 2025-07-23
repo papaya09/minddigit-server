@@ -1,34 +1,20 @@
 import express from 'express';
-import { generateRoomCode } from '../utils/gameUtils';
+import Game from '../models/Game';
+import Player from '../models/Player';
+import Move from '../models/Move';
+import Connection from '../models/Connection';
+import { generateRoomCode, calculateHits } from '../utils/gameUtils';
+import { ensureConnection } from '../config/database';
+import { updateGameActivity } from '../utils/cleanup';
 
 const router = express.Router();
-
-// In-memory storage for quick gameplay
-interface InMemoryGame {
-  code: string;
-  digits: number;
-  state: 'waiting' | 'active' | 'finished';
-  winner?: string;
-  startedAt?: Date;
-  createdAt: Date;
-}
-
-interface InMemoryPlayer {
-  name: string;
-  avatar: string;
-  secret?: string;
-  gameId: string;
-  isReady: boolean;
-  createdAt: Date;
-}
-
-const games = new Map<string, InMemoryGame>();
-const players = new Map<string, InMemoryPlayer[]>();
 
 // Create new game room with player
 router.post('/rooms', async (req, res) => {
   try {
-    const { playerName, avatar, gameMode = 'classic', digits = 4 } = req.body;
+    await ensureConnection();
+    
+    const { playerName, avatar, gameMode = '4d', digits = 4 } = req.body;
     
     console.log(`🏠 Create room request from: ${playerName} (${avatar})`);
     
@@ -39,45 +25,54 @@ router.post('/rooms', async (req, res) => {
     let code = generateRoomCode();
     
     // Ensure unique room code
-    while (games.has(code)) {
+    while (await Game.findOne({ code })) {
       code = generateRoomCode();
     }
     
     console.log(`🎲 Generated room code: ${code}`);
     
     // Create game
-    const game: InMemoryGame = { 
-      code, 
-      digits, 
-      state: 'waiting',
-      createdAt: new Date()
-    };
-    games.set(code, game);
+    const game = new Game({
+      code,
+      digits,
+      gameMode,
+      hostPlayer: playerName,
+      gameSettings: {
+        digits,
+        allowDuplicates: false
+      }
+    });
+    
+    await game.save();
     
     // Create host player
-    const player: InMemoryPlayer = {
+    const player = new Player({
       name: playerName,
       avatar: avatar || '🎯',
-      gameId: code,
-      isReady: false,
-      createdAt: new Date()
-    };
+      gameId: game._id,
+      roomCode: code,
+      position: 1
+    });
     
-    players.set(code, [player]);
+    await player.save();
+    
+    // Update game player count
+    game.currentPlayers = 1;
+    await game.save();
     
     console.log(`✅ Room ${code} created successfully with host ${playerName}`);
-    console.log(`📊 Total games: ${games.size}, Total player groups: ${players.size}`);
-    console.log(`🔐 Game data stored: ${JSON.stringify(game)}`);
-    console.log(`👤 Player data stored: ${JSON.stringify(player)}`);
     
-    // Verify data is actually stored
-    const verifyGame = games.get(code);
-    const verifyPlayers = players.get(code);
-    console.log(`✅ Verification - Game exists: ${!!verifyGame}, Players exist: ${!!verifyPlayers}, Player count: ${verifyPlayers?.length || 0}`);
+    // Add cache headers for future polling
+    const lastModified = new Date().toISOString();
+    res.set({
+      'Last-Modified': lastModified,
+      'ETag': `"${game._id}-${game.updatedAt?.getTime()}"`
+    });
     
     res.json({ 
       roomCode: code,
-      message: 'Room created successfully'
+      message: 'Room created successfully',
+      lastModified
     });
   } catch (error) {
     console.error('Error creating room:', error);
@@ -88,6 +83,8 @@ router.post('/rooms', async (req, res) => {
 // Join existing room
 router.post('/rooms/join', async (req, res) => {
   try {
+    await ensureConnection();
+    
     const { roomCode, playerName, avatar } = req.body;
     
     console.log(`🚪 Join room request: ${playerName} wants to join ${roomCode}`);
@@ -96,12 +93,9 @@ router.post('/rooms/join', async (req, res) => {
       return res.status(400).json({ message: 'Room code and player name are required' });
     }
     
-    console.log(`📊 Current games: ${games.size}, players: ${players.size}`);
-    console.log(`🔍 Looking for game: ${roomCode}`);
-    
-    const game = games.get(roomCode);
+    const game = await Game.findOne({ code: roomCode, isActive: true });
     if (!game) {
-      console.log(`❌ Game ${roomCode} not found. Available: ${Array.from(games.keys()).join(', ')}`);
+      console.log(`❌ Game ${roomCode} not found or inactive`);
       return res.status(404).json({ message: 'Room not found' });
     }
     
@@ -110,40 +104,41 @@ router.post('/rooms/join', async (req, res) => {
       return res.status(400).json({ message: 'Game has already started' });
     }
     
-    let roomPlayers = players.get(roomCode) || [];
-    console.log(`👥 Current players in ${roomCode}: ${roomPlayers.length}`);
+    // Check existing players
+    const existingPlayers = await Player.find({ roomCode, gameId: game._id });
     
-    // Check if player already exists (exclude placeholders)
-    const existingPlayer = roomPlayers.find(p => p.name === playerName);
+    // Check if player already exists
+    const existingPlayer = existingPlayers.find(p => p.name === playerName);
     if (existingPlayer) {
       console.log(`⚠️ Player ${playerName} already exists in room ${roomCode}`);
       return res.status(400).json({ message: 'Player name already taken in this room' });
     }
     
-    // Remove placeholder players and check capacity
-    roomPlayers = roomPlayers.filter(p => p.name !== 'Unknown');
-    console.log(`🔧 After removing placeholders: ${roomPlayers.length} real players`);
-    
-    // Check room capacity (max 4 players, excluding placeholders)
-    if (roomPlayers.length >= 4) {
-      console.log(`🚫 Room ${roomCode} is full (${roomPlayers.length}/4)`);
+    // Check room capacity (max 4 players)
+    if (existingPlayers.length >= 4) {
+      console.log(`🚫 Room ${roomCode} is full (${existingPlayers.length}/4)`);
       return res.status(400).json({ message: 'Room is full' });
     }
     
     // Create player
-    const player: InMemoryPlayer = {
+    const player = new Player({
       name: playerName,
       avatar: avatar || '🎯',
-      gameId: roomCode,
-      isReady: false,
-      createdAt: new Date()
-    };
+      gameId: game._id,
+      roomCode,
+      position: existingPlayers.length + 1
+    });
     
-    roomPlayers.push(player);
-    players.set(roomCode, roomPlayers);
+    await player.save();
     
-    console.log(`✅ Player ${playerName} joined room ${roomCode}. Total players: ${roomPlayers.length}`);
-    console.log(`👥 Final player list: ${roomPlayers.map(p => `${p.name}(${p.avatar})`).join(', ')}`);
+    // Update game player count
+    game.currentPlayers = existingPlayers.length + 1;
+    await game.save();
+    
+    // Update game activity
+    await updateGameActivity(roomCode);
+    
+    console.log(`✅ Player ${playerName} joined room ${roomCode}. Total players: ${game.currentPlayers}`);
     
     res.json({ 
       message: 'Joined room successfully'
@@ -157,24 +152,31 @@ router.post('/rooms/join', async (req, res) => {
 // Get all available rooms
 router.get('/rooms', async (req, res) => {
   try {
-    const roomList = Array.from(games.values())
-      .filter(game => ['waiting', 'active'].includes(game.state))
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      .slice(0, 20)
-      .map(game => {
-        const roomPlayers = players.get(game.code) || [];
-        const host = roomPlayers[0];
+    await ensureConnection();
+    
+    const games = await Game.find({
+      isActive: true,
+      state: { $in: ['waiting', 'active'] }
+    })
+    .sort({ createdAt: -1 })
+    .limit(20);
+    
+    const roomList = await Promise.all(
+      games.map(async (game) => {
+        const players = await Player.find({ gameId: game._id });
+        const host = players.find(p => p.name === game.hostPlayer) || players[0];
         
         return {
           code: game.code,
           hostName: host?.name || 'Unknown',
           hostAvatar: host?.avatar || '🎯',
-          gameMode: 'classic',
-          playerCount: roomPlayers.length,
-          maxPlayers: 4,
+          gameMode: game.gameMode,
+          playerCount: players.length,
+          maxPlayers: game.maxPlayers,
           isGameStarted: game.state === 'active'
         };
-      });
+      })
+    );
     
     res.json({ rooms: roomList });
   } catch (error) {
@@ -186,81 +188,61 @@ router.get('/rooms', async (req, res) => {
 // Get room state for polling
 router.get('/rooms/:code/state', async (req, res) => {
   try {
+    await ensureConnection();
+    
     const { code } = req.params;
     
     console.log(`🔍 Getting room state for: ${code}`);
-    console.log(`📊 Total games in memory: ${games.size}`);
-    console.log(`📊 Total player groups: ${players.size}`);
-    console.log(`🌐 Instance ID: ${process.env.VERCEL_REGION || 'local'}-${Date.now() % 1000}`);
     
-    let game = games.get(code);
-    let roomPlayers = players.get(code) || [];
-    
-    // Enhanced Auto-recovery: Create minimal game/player data if completely missing
-    if (!game && roomPlayers.length === 0) {
-      console.log(`🔧 Cold start detected: No data for room ${code}. Creating minimal recovery data...`);
-      
-      // Create basic game structure
-      game = {
-        code: code,
-        digits: 4,
-        state: 'waiting',
-        createdAt: new Date()
-      };
-      games.set(code, game);
-      
-      // Create placeholder player (will be updated when real players reconnect)
-      const placeholderPlayer: InMemoryPlayer = {
-        name: 'Unknown',
-        avatar: '👤',
-        gameId: code,
-        isReady: false,
-        createdAt: new Date()
-      };
-      roomPlayers = [placeholderPlayer];
-      players.set(code, roomPlayers);
-      
-      console.log(`✅ Recovery: Room ${code} recreated with placeholder data`);
-    }
-    // Auto-recovery: If players exist but game is missing, recreate game
-    else if (!game && roomPlayers.length > 0) {
-      console.log(`🔧 Auto-recovery: Game ${code} missing but players exist. Recreating...`);
-      game = {
-        code: code,
-        digits: 4,
-        state: 'waiting',
-        createdAt: new Date()
-      };
-      games.set(code, game);
-      console.log(`✅ Game ${code} recreated successfully`);
-    }
-    
+    const game = await Game.findOne({ code, isActive: true });
     if (!game) {
-      console.log(`❌ Room ${code} not found. Available rooms: ${Array.from(games.keys()).join(', ')}`);
+      console.log(`❌ Room ${code} not found`);
       return res.status(404).json({ message: 'Room not found' });
     }
     
-    // Filter out placeholder players if real players exist
-    const realPlayers = roomPlayers.filter(p => p.name !== 'Unknown');
-    const finalPlayers = realPlayers.length > 0 ? realPlayers : roomPlayers;
+    const players = await Player.find({ gameId: game._id });
     
-    console.log(`👥 Raw players: ${roomPlayers.length}, Real players: ${realPlayers.length}, Final: ${finalPlayers.length}`);
-    console.log(`👥 Final player list: ${finalPlayers.map(p => `${p.name}(${p.avatar})`).join(', ')}`);
+    console.log(`👥 Found ${players.length} players in room ${code}`);
     
-    const playerStates = finalPlayers.map(p => ({
+    // Check conditional request headers
+    const ifModifiedSince = req.headers['if-modified-since'];
+    const ifNoneMatch = req.headers['if-none-match'];
+    
+    const lastModified = game.updatedAt || game.createdAt;
+    const etag = `"${game._id}-${lastModified.getTime()}"`;
+    
+    // Return 304 if not modified
+    if (ifModifiedSince || ifNoneMatch) {
+      const clientTime = ifModifiedSince ? new Date(ifModifiedSince) : null;
+      if ((clientTime && lastModified <= clientTime) || ifNoneMatch === etag) {
+        return res.status(304).end();
+      }
+    }
+    
+    const playerStates = players.map(p => ({
       name: p.name,
       avatar: p.avatar,
-      isReady: p.isReady
+      isReady: p.isReady,
+      isConnected: p.isConnected
     }));
     
     const roomState = {
       game: {
         code: game.code,
         state: game.state,
-        digits: game.digits
+        digits: game.digits,
+        winner: game.winner
       },
-      players: playerStates
+      players: playerStates,
+      lastModified: lastModified.toISOString()
     };
+    
+    // Set cache headers
+    res.set({
+      'Last-Modified': lastModified.toUTCString(),
+      'ETag': etag,
+      'Cache-Control': 'private, max-age=0'
+    });
     
     console.log(`✅ Room state for ${code}: ${playerStates.length} players, state: ${game.state}`);
     res.json(roomState);
@@ -273,12 +255,14 @@ router.get('/rooms/:code/state', async (req, res) => {
 // Set player secret
 router.post('/rooms/secret', async (req, res) => {
   try {
+    await ensureConnection();
+    
     const { roomCode, secret, playerName } = req.body;
     
     console.log(`🔐 Set secret request for room ${roomCode} from player ${playerName}`);
     
-    if (!roomCode || !secret) {
-      return res.status(400).json({ message: 'Room code and secret are required' });
+    if (!roomCode || !secret || !playerName) {
+      return res.status(400).json({ message: 'Room code, secret, and player name are required' });
     }
     
     if (!/^\d{4}$/.test(secret)) {
@@ -290,16 +274,12 @@ router.post('/rooms/secret', async (req, res) => {
       return res.status(400).json({ message: 'Secret must have unique digits' });
     }
     
-    const game = games.get(roomCode);
+    const game = await Game.findOne({ code: roomCode, isActive: true });
     if (!game) {
       return res.status(404).json({ message: 'Room not found' });
     }
     
-    const roomPlayers = players.get(roomCode) || [];
-    console.log(`🔍 Looking for player ${playerName}. Current players: ${roomPlayers.map(p => p.name).join(', ')}`);
-    
-    // Find specific player by name
-    const player = roomPlayers.find(p => p.name === playerName);
+    const player = await Player.findOne({ gameId: game._id, name: playerName });
     if (!player) {
       console.log(`❌ Player ${playerName} not found in room ${roomCode}`);
       return res.status(404).json({ message: 'Player not found in this room' });
@@ -310,32 +290,29 @@ router.post('/rooms/secret', async (req, res) => {
       return res.status(400).json({ message: 'Secret already set for this player' });
     }
     
-    // Set secret for specific player
+    // Set secret for player
     player.secret = secret;
     player.isReady = true;
+    await player.save();
     
     console.log(`✅ Secret set for player: ${player.name}`);
     
     // Check if all players are ready to start game
-    const readyPlayers = roomPlayers.filter(p => p.isReady);
-    console.log(`📊 Ready players: ${readyPlayers.length}/${roomPlayers.length}`);
-    console.log(`👥 Ready list: ${readyPlayers.map(p => p.name).join(', ')}`);
+    const allPlayers = await Player.find({ gameId: game._id });
+    const readyPlayers = allPlayers.filter(p => p.isReady);
     
-    if (readyPlayers.length >= 2 && readyPlayers.length === roomPlayers.length) {
+    console.log(`📊 Ready players: ${readyPlayers.length}/${allPlayers.length}`);
+    
+    if (readyPlayers.length >= 2 && readyPlayers.length === allPlayers.length) {
       game.state = 'active';
       game.startedAt = new Date();
-      
-      // Randomly select first player
-      const randomIndex = Math.floor(Math.random() * readyPlayers.length);
-      const firstPlayer = readyPlayers[randomIndex];
-      console.log(`🎲 Game starting! First player: ${firstPlayer.name}`);
-      
-      games.set(roomCode, game);
+      await game.save();
       
       console.log(`🎮 Game ${roomCode} is now ACTIVE with ${readyPlayers.length} players`);
     }
     
-    players.set(roomCode, roomPlayers);
+    // Update game activity
+    await updateGameActivity(roomCode);
     
     res.json({ message: 'Secret set successfully' });
   } catch (error) {
@@ -347,7 +324,9 @@ router.post('/rooms/secret', async (req, res) => {
 // Make a guess
 router.post('/rooms/guess', async (req, res) => {
   try {
-    const { roomCode, guess, playerName } = req.body;
+    await ensureConnection();
+    
+    const { roomCode, guess, playerName, targetPlayer } = req.body;
     
     if (!roomCode || !guess || !playerName) {
       return res.status(400).json({ message: 'Room code, guess, and player name are required' });
@@ -357,7 +336,7 @@ router.post('/rooms/guess', async (req, res) => {
       return res.status(400).json({ message: 'Guess must be exactly 4 digits' });
     }
     
-    const game = games.get(roomCode);
+    const game = await Game.findOne({ code: roomCode, isActive: true });
     if (!game) {
       return res.status(404).json({ message: 'Room not found' });
     }
@@ -366,46 +345,147 @@ router.post('/rooms/guess', async (req, res) => {
       return res.status(400).json({ message: 'Game is not in progress' });
     }
     
-    const roomPlayers = players.get(roomCode) || [];
-    const guessingPlayer = roomPlayers.find(p => p.name === playerName);
-    
+    const guessingPlayer = await Player.findOne({ gameId: game._id, name: playerName });
     if (!guessingPlayer) {
       return res.status(404).json({ message: 'Player not found in this room' });
     }
     
-    // Find target player (for simplicity, guess against the first other player)
-    const targetPlayer = roomPlayers.find(p => 
-      p.name !== playerName && p.secret
-    );
+    // Find target player
+    const target = await Player.findOne({ 
+      gameId: game._id, 
+      name: targetPlayer || { $ne: playerName },
+      secret: { $exists: true }
+    });
     
-    if (!targetPlayer || !targetPlayer.secret) {
+    if (!target || !target.secret) {
       return res.status(400).json({ message: 'No valid target player found' });
     }
     
-    // Calculate hit
-    const secret = targetPlayer.secret;
-    let hit = 0;
+    // Calculate hits
+    const hits = calculateHits(guess, target.secret);
     
-    for (let i = 0; i < 4; i++) {
-      if (guess[i] === secret[i]) {
-        hit++;
-      }
+    // Save move
+    const moveCount = await Move.countDocuments({ gameId: game._id });
+    const move = new Move({
+      gameId: game._id,
+      roomCode,
+      fromPlayer: playerName,
+      targetPlayer: target.name,
+      from: guessingPlayer._id,
+      to: target._id,
+      guess,
+      hits,
+      moveNumber: moveCount + 1,
+      isWinning: hits === 4
+    });
+    
+    await move.save();
+    
+    // Update player stats
+    guessingPlayer.stats.guessesMade++;
+    if (hits > 0) {
+      guessingPlayer.stats.correctGuesses++;
     }
+    await guessingPlayer.save();
     
     // Check for win
-    if (hit === 4) {
+    if (hits === 4) {
       game.state = 'finished';
-      game.winner = guessingPlayer.name;
-      games.set(roomCode, game);
+      game.winner = guessingPlayer._id;
+      await game.save();
+      
+      // Update winner stats
+      guessingPlayer.stats.gamesWon++;
+      await guessingPlayer.save();
+      
+      console.log(`🎉 Game ${roomCode} finished! Winner: ${playerName}`);
     }
     
+    // Update game activity
+    await updateGameActivity(roomCode);
+    
     res.json({ 
-      hit: hit,
+      hits,
+      isWinning: hits === 4,
+      targetPlayer: target.name,
       message: 'Guess processed successfully'
     });
   } catch (error) {
     console.error('Error making guess:', error);
     res.status(500).json({ message: 'Failed to make guess' });
+  }
+});
+
+// Heartbeat endpoint to track player connections
+router.post('/players/heartbeat', async (req, res) => {
+  try {
+    await ensureConnection();
+    
+    const { roomCode, playerName, sessionId } = req.body;
+    
+    if (!roomCode || !playerName) {
+      return res.status(400).json({ message: 'Room code and player name are required' });
+    }
+    
+    // Update player heartbeat
+    const player = await Player.findOneAndUpdate(
+      { roomCode, name: playerName },
+      { 
+        lastHeartbeat: new Date(),
+        isConnected: true
+      },
+      { new: true }
+    );
+    
+    if (player) {
+      // Update connection tracking
+      await Connection.findOneAndUpdate(
+        { roomCode, playerName },
+        {
+          roomCode,
+          playerName,
+          sessionId: sessionId || `${playerName}-${Date.now()}`,
+          lastSeen: new Date(),
+          isActive: true,
+          userAgent: req.headers['user-agent']
+        },
+        { upsert: true, new: true }
+      );
+    }
+    
+    res.json({ message: 'Heartbeat updated' });
+  } catch (error) {
+    console.error('Error updating heartbeat:', error);
+    res.status(500).json({ message: 'Failed to update heartbeat' });
+  }
+});
+
+// Get recent moves for a room
+router.get('/rooms/:code/moves', async (req, res) => {
+  try {
+    await ensureConnection();
+    
+    const { code } = req.params;
+    const { since } = req.query;
+    
+    const game = await Game.findOne({ code, isActive: true });
+    if (!game) {
+      return res.status(404).json({ message: 'Room not found' });
+    }
+    
+    const query: any = { gameId: game._id };
+    if (since) {
+      query.timestamp = { $gt: new Date(since as string) };
+    }
+    
+    const moves = await Move.find(query)
+      .sort({ timestamp: -1 })
+      .limit(50);
+    
+    res.json({ moves });
+  } catch (error) {
+    console.error('Error getting moves:', error);
+    res.status(500).json({ message: 'Failed to get moves' });
   }
 });
 

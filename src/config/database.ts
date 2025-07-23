@@ -1,6 +1,14 @@
 import mongoose from 'mongoose';
 
-const connectDB = async (): Promise<void> => {
+// Global variable to cache the connection
+let cachedConnection: typeof mongoose | null = null;
+
+const connectDB = async (): Promise<typeof mongoose> => {
+  // Return cached connection if available
+  if (cachedConnection && mongoose.connection.readyState === 1) {
+    return cachedConnection;
+  }
+
   try {
     const mongoURI = process.env.MONGODB_URI;
     
@@ -8,47 +16,70 @@ const connectDB = async (): Promise<void> => {
       console.warn('⚠️ MONGODB_URI environment variable is not set');
       console.warn('🔧 Please set up MongoDB Atlas and add MONGODB_URI to Vercel environment variables');
       console.warn('📖 Guide: https://www.mongodb.com/atlas');
-      return; // Skip connection in production if no URI
+      throw new Error('MongoDB URI not configured');
     }
     
-    // MongoDB connection options for better reliability
+    // Optimized connection options for Vercel serverless
     const options = {
-      maxPoolSize: 10,
-      serverSelectionTimeoutMS: 5000,
+      maxPoolSize: 5,              // Reduced for serverless
+      minPoolSize: 1,              // Maintain minimum connections
+      maxIdleTimeMS: 30000,        // Close connections after 30s idle
+      serverSelectionTimeoutMS: 10000,  // Increased timeout
       socketTimeoutMS: 45000,
-      bufferCommands: false,
-      bufferMaxEntries: 0
+      connectTimeoutMS: 10000,
+      bufferCommands: false,       // Disable mongoose buffering
+      bufferMaxEntries: 0,
+      // Serverless optimizations
+      heartbeatFrequencyMS: 10000, // Check connection every 10s
+      retryWrites: true,
+      retryReads: true
     };
     
-    await mongoose.connect(mongoURI, options);
+    const connection = await mongoose.connect(mongoURI, options);
+    cachedConnection = connection;
     
     console.log('📦 MongoDB Connected successfully');
     console.log(`📍 Database: ${mongoose.connection.name}`);
     
-    // Handle connection events
-    mongoose.connection.on('error', (error) => {
-      console.error('❌ MongoDB connection error:', error);
-    });
+    // Handle connection events (only setup once)
+    if (!mongoose.connection.listeners('error').length) {
+      mongoose.connection.on('error', (error) => {
+        console.error('❌ MongoDB connection error:', error);
+        cachedConnection = null; // Clear cache on error
+      });
+      
+      mongoose.connection.on('disconnected', () => {
+        console.log('⚠️ MongoDB disconnected');
+        cachedConnection = null; // Clear cache on disconnect
+      });
+      
+      mongoose.connection.on('reconnected', () => {
+        console.log('✅ MongoDB reconnected');
+      });
+    }
     
-    mongoose.connection.on('disconnected', () => {
-      console.log('⚠️ MongoDB disconnected');
-    });
-    
-    mongoose.connection.on('reconnected', () => {
-      console.log('✅ MongoDB reconnected');
-    });
+    return connection;
     
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error);
+    cachedConnection = null; // Clear cache on failure
     
-    // In production, don't exit process for Vercel
-    if (process.env.NODE_ENV === 'production') {
-      console.error('🔄 Retrying connection in 5 seconds...');
-      setTimeout(connectDB, 5000);
-    } else {
-      process.exit(1);
+    // In serverless, throw error instead of process.exit
+    if (process.env.VERCEL) {
+      throw error;
     }
+    
+    // In development, exit process
+    process.exit(1);
   }
+};
+
+// Utility function to ensure connection
+export const ensureConnection = async (): Promise<typeof mongoose> => {
+  if (!cachedConnection || mongoose.connection.readyState !== 1) {
+    return await connectDB();
+  }
+  return cachedConnection;
 };
 
 export default connectDB;

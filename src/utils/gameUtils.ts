@@ -33,6 +33,9 @@ export const calculateHit = (secret: string, guess: string): number => {
   return hits;
 };
 
+// Alias for consistency with new API
+export const calculateHits = calculateHit;
+
 // Validate 4-digit number (no repeated digits)
 export const isValidSecret = (secret: string): boolean => {
   if (secret.length !== 4) return false;
