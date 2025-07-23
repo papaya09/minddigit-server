@@ -9,6 +9,13 @@ const router = express.Router();
 // Create new game room with player
 router.post('/rooms', async (req, res) => {
   try {
+    // Check if database is connected
+    if (!process.env.MONGODB_URI) {
+      return res.status(503).json({ 
+        message: 'Database not configured. Please contact administrator.' 
+      });
+    }
+    
     const { playerName, avatar, gameMode = 'classic', digits = 4 } = req.body;
     
     if (!playerName) {
@@ -45,7 +52,23 @@ router.post('/rooms', async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating room:', error);
-    res.status(500).json({ message: 'Failed to create room' });
+    
+    // More detailed error for debugging
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    if (error instanceof Error) {
+      console.error('Error details:', error.message, error.stack);
+      
+      if (error.message.includes('buffering timed out')) {
+        return res.status(500).json({ 
+          message: 'Database connection failed. Please check MongoDB setup.' 
+        });
+      }
+    }
+    
+    res.status(500).json({ 
+      message: 'Failed to create room', 
+      error: process.env.NODE_ENV === 'development' ? errorMessage : undefined 
+    });
   }
 });
 

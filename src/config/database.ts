@@ -2,10 +2,13 @@ import mongoose from 'mongoose';
 
 const connectDB = async (): Promise<void> => {
   try {
-    const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/minddigits';
+    const mongoURI = process.env.MONGODB_URI;
     
     if (!mongoURI) {
-      throw new Error('MONGODB_URI environment variable is not set');
+      console.warn('⚠️ MONGODB_URI environment variable is not set');
+      console.warn('🔧 Please set up MongoDB Atlas and add MONGODB_URI to Vercel environment variables');
+      console.warn('📖 Guide: https://www.mongodb.com/atlas');
+      return; // Skip connection in production if no URI
     }
     
     // MongoDB connection options for better reliability
