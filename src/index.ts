@@ -12,7 +12,10 @@ const PORT = process.env.PORT || 3000;
 // Connect to MongoDB
 connectDB();
 
-// Create HTTP server
+// Export app for Vercel
+export default app;
+
+// Create HTTP server for local development
 const server = createServer(app);
 
 // Setup Socket.IO with improved CORS for Vercel
@@ -34,6 +37,9 @@ io.on('connection', (socket) => {
   setupGameEvents(io, socket);
 });
 
-server.listen(PORT, () => {
-  console.log(`🚀 MindDigits Server running on port ${PORT}`);
-});
+// Only start server if not in Vercel environment
+if (process.env.VERCEL !== '1') {
+  server.listen(PORT, () => {
+    console.log(`🚀 MindDigits Server running on port ${PORT}`);
+  });
+}
