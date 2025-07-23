@@ -1,13 +1,6 @@
-import dotenv from 'dotenv';
-dotenv.config();
-
 import express from 'express';
 import cors from 'cors';
 import gameRoutes from './routes/game';
-import connectDB from './config/database';
-
-// Connect to MongoDB
-connectDB();
 
 const app = express();
 
