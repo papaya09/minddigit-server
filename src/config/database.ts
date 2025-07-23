@@ -28,7 +28,6 @@ const connectDB = async (): Promise<typeof mongoose> => {
       socketTimeoutMS: 45000,
       connectTimeoutMS: 10000,
       bufferCommands: false,       // Disable mongoose buffering
-      bufferMaxEntries: 0,
       // Serverless optimizations
       heartbeatFrequencyMS: 10000, // Check connection every 10s
       retryWrites: true,
