@@ -82,3 +82,4 @@ export const ensureConnection = async (): Promise<typeof mongoose> => {
 };
 
 export default connectDB;
+export { connectDB as connectToDatabase };
