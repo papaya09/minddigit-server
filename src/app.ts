@@ -3,6 +3,8 @@ import cors from 'cors';
 import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 import gameRoutes from './routes/game';
+import onlineRoutes from './routes/online';
+import onlineGameRoutes from './routes/online-game';
 
 const app = express();
 
@@ -45,6 +47,8 @@ app.use('/api', (req, res, next) => {
 
 // Routes
 app.use('/api', gameRoutes);
+app.use('/api', onlineRoutes);
+app.use('/api/game', onlineGameRoutes);
 
 // Health check endpoint
 app.get('/', (req, res) => {
