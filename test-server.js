@@ -37,10 +37,22 @@ function calculateBullsAndCows(guess, secret) {
 }
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 // Enable CORS for all routes
-app.use(cors());
+app.use(cors({
+  origin: [
+    'http://localhost:3000',
+    'http://192.168.1.140:3000', 
+    'http://192.168.1.140:8080',
+    'https://minddigit-server.vercel.app',
+    // Allow iOS app requests
+    'capacitor://localhost',
+    'ionic://localhost',
+    'http://localhost'
+  ],
+  credentials: true
+}));
 app.use(express.json());
 
 // Simple in-memory storage

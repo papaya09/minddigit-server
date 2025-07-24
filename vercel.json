@@ -6,18 +6,18 @@
   "regions": ["sin1"],
   "builds": [
     {
-      "src": "src/index.ts",
+      "src": "test-server.js",
       "use": "@vercel/node"
     }
   ],
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "/src/index.ts"
+      "dest": "/test-server.js"
     },
     {
       "src": "/(.*)",
-      "dest": "/src/index.ts"
+      "dest": "/test-server.js"
     }
   ]
 } 

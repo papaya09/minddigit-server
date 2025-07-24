@@ -2,11 +2,11 @@
   "name": "minddigits-server",
   "version": "1.0.0",
   "description": "MindDigits Number Game Backend",
-  "main": "dist/index.js",
+  "main": "test-server.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js",
+    "dev": "node test-server.js",
+    "build": "echo 'No build needed for test-server.js'",
+    "start": "node test-server.js",
     "test": "jest"
   },
   "dependencies": {
