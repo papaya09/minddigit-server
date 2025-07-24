@@ -16,7 +16,13 @@
     }
   ],
   "env": {
-    "NODE_ENV": "production"
+    "NODE_ENV": "production",
+    "MONGODB_URI": "@mongodb-uri"
   },
-  "regions": ["sin1"]
+  "regions": ["sin1"],
+  "functions": {
+    "api/**/*.ts": {
+      "runtime": "@vercel/node@20.x"
+    }
+  }
 } 
