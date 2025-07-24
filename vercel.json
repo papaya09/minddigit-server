@@ -1,28 +1,7 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "src/index.ts",
-      "use": "@vercel/node",
-      "config": {
-        "maxLambdaSize": "50mb"
-      }
-    }
-  ],
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "/src/index.ts"
-    }
-  ],
   "env": {
-    "NODE_ENV": "production",
-    "MONGODB_URI": "@mongodb-uri"
+    "NODE_ENV": "production"
   },
-  "regions": ["sin1"],
-  "functions": {
-    "api/**/*.ts": {
-      "runtime": "@vercel/node@20.x"
-    }
-  }
+  "regions": ["sin1"]
 } 
