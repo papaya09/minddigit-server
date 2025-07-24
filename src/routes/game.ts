@@ -377,9 +377,9 @@ router.post('/rooms/secret', async (req, res) => {
     const expectedDigits = game.digits;
     const digitRegex = new RegExp(`^\\d{${expectedDigits}}$`);
     
-    if (!digitRegex.test(secret)) {
-      return res.status(400).json({ message: `Secret must be exactly ${expectedDigits} digits` });
-    }
+    // if (!digitRegex.test(secret)) {
+    //   return res.status(400).json({ message: `Secret must be exactly ${expectedDigits} digits` });
+    // }
     
     // Check for duplicate digits
     if (new Set(secret).size !== expectedDigits) {
