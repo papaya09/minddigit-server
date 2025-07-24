@@ -39,7 +39,8 @@ router.post('/rooms', async (req, res) => {
       hostPlayer: playerName,
       gameSettings: {
         digits,
-        allowDuplicates: false
+        allowDuplicates: digits <= 2, // Allow duplicates for 1-2 digit games
+        maxPlayers: 4
       }
     });
     
@@ -377,14 +378,24 @@ router.post('/rooms/secret', async (req, res) => {
     const expectedDigits = game.digits;
     const digitRegex = new RegExp(`^\\d{${expectedDigits}}$`);
     
-    // if (!digitRegex.test(secret)) {
-    //   return res.status(400).json({ message: `Secret must be exactly ${expectedDigits} digits` });
-    // }
-    
-    // Check for duplicate digits
-    if (new Set(secret).size !== expectedDigits) {
-      return res.status(400).json({ message: 'Secret must have unique digits' });
+    if (!digitRegex.test(secret)) {
+      return res.status(400).json({ message: `Secret must be exactly ${expectedDigits} digits` });
     }
+    
+    // Check for duplicate digits based on game rules
+    // For 1-2 digit games: allow duplicates (e.g., "11", "22")
+    // For 3+ digit games: require unique digits (e.g., "123" not "112")
+    const allowDuplicates = game.gameSettings?.allowDuplicates ?? (expectedDigits <= 2);
+    const uniqueDigitsCount = new Set(secret).size;
+    
+    console.log(`🔐 Validating secret "${secret}": digits=${expectedDigits}, unique=${uniqueDigitsCount}, allowDuplicates=${allowDuplicates}`);
+    
+    if (!allowDuplicates && uniqueDigitsCount !== expectedDigits) {
+      console.log(`❌ Secret rejected: has ${uniqueDigitsCount} unique digits but needs ${expectedDigits} unique digits`);
+      return res.status(400).json({ message: `Secret must have ${expectedDigits} unique digits (no duplicates allowed for ${expectedDigits}-digit games)` });
+    }
+    
+    console.log(`✅ Secret validation passed: "${secret}" is valid for ${expectedDigits}-digit game (allowDuplicates: ${allowDuplicates})`);
     
     const player = await Player.findOne({ gameId: game._id, name: playerName });
     if (!player) {
