@@ -270,18 +270,22 @@ router.post('/rooms/secret', async (req, res) => {
       return res.status(400).json({ message: 'Room code, secret, and player name are required' });
     }
     
-    if (!/^\d{4}$/.test(secret)) {
-      return res.status(400).json({ message: 'Secret must be exactly 4 digits' });
-    }
-    
-    // Check for duplicate digits
-    if (new Set(secret).size !== 4) {
-      return res.status(400).json({ message: 'Secret must have unique digits' });
-    }
-    
     const game = await Game.findOne({ code: roomCode, isActive: true });
     if (!game) {
       return res.status(404).json({ message: 'Room not found' });
+    }
+    
+    // Validate secret based on game mode
+    const expectedDigits = game.digits;
+    const digitRegex = new RegExp(`^\\d{${expectedDigits}}$`);
+    
+    if (!digitRegex.test(secret)) {
+      return res.status(400).json({ message: `Secret must be exactly ${expectedDigits} digits` });
+    }
+    
+    // Check for duplicate digits
+    if (new Set(secret).size !== expectedDigits) {
+      return res.status(400).json({ message: 'Secret must have unique digits' });
     }
     
     const player = await Player.findOne({ gameId: game._id, name: playerName });
@@ -397,13 +401,17 @@ router.post('/rooms/guess', async (req, res) => {
       return res.status(400).json({ message: 'Room code, guess, and player name are required' });
     }
     
-    if (!/^\d{4}$/.test(guess)) {
-      return res.status(400).json({ message: 'Guess must be exactly 4 digits' });
-    }
-    
     const game = await Game.findOne({ code: roomCode, isActive: true });
     if (!game) {
       return res.status(404).json({ message: 'Room not found' });
+    }
+    
+    // Validate guess based on game mode
+    const expectedDigits = game.digits;
+    const digitRegex = new RegExp(`^\\d{${expectedDigits}}$`);
+    
+    if (!digitRegex.test(guess)) {
+      return res.status(400).json({ message: `Guess must be exactly ${expectedDigits} digits` });
     }
     
     if (game.state !== 'active') {
@@ -441,7 +449,7 @@ router.post('/rooms/guess', async (req, res) => {
       guess,
       hits,
       moveNumber: moveCount + 1,
-      isWinning: hits === 4
+      isWinning: hits === expectedDigits
     });
     
     await move.save();
@@ -454,7 +462,7 @@ router.post('/rooms/guess', async (req, res) => {
     await guessingPlayer.save();
     
     // Check for win
-    if (hits === 4) {
+    if (hits === expectedDigits) {
       game.state = 'finished';
       game.winner = guessingPlayer._id;
       await game.save();
@@ -471,7 +479,7 @@ router.post('/rooms/guess', async (req, res) => {
     
     res.json({ 
       hits,
-      isWinning: hits === 4,
+      isWinning: hits === expectedDigits,
       targetPlayer: target.name,
       message: 'Guess processed successfully'
     });
