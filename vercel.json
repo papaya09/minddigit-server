@@ -3,5 +3,21 @@
   "env": {
     "NODE_ENV": "production"
   },
-  "regions": ["sin1"]
+  "regions": ["sin1"],
+  "builds": [
+    {
+      "src": "src/index.ts",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/src/index.ts"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/src/index.ts"
+    }
+  ]
 } 

@@ -7,7 +7,16 @@ const PORT = parseInt(process.env.PORT || '3000');
 
 // Middleware
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://192.168.1.140:3000', 'http://192.168.1.140:8080'],
+  origin: [
+    'http://localhost:3000', 
+    'http://192.168.1.140:3000', 
+    'http://192.168.1.140:8080',
+    'https://minddigit-server.vercel.app',
+    // Allow iOS app requests
+    'capacitor://localhost',
+    'ionic://localhost',
+    'http://localhost'
+  ],
   credentials: true
 }));
 
