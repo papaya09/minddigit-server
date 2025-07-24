@@ -190,7 +190,105 @@ router.get('/rooms', async (req, res) => {
   }
 });
 
-// Get room state for polling
+// Get detailed gameplay state with turn info
+router.get('/rooms/:code/gameplay', async (req, res) => {
+  try {
+    await ensureConnection();
+    
+    const { code } = req.params;
+    
+    console.log(`🎮 Getting gameplay state for: ${code}`);
+    
+    const game = await Game.findOne({ code, isActive: true });
+    if (!game) {
+      console.log(`❌ Room ${code} not found`);
+      return res.status(404).json({ message: 'Room not found' });
+    }
+    
+    const players = await Player.find({ gameId: game._id });
+    
+    // Check conditional request headers for caching
+    const ifModifiedSince = req.headers['if-modified-since'];
+    const ifNoneMatch = req.headers['if-none-match'];
+    
+    const lastModified = game.updatedAt || game.createdAt;
+    const etag = `"${game._id}-${lastModified.getTime()}"`;
+    
+    // Return 304 if not modified
+    if (ifModifiedSince || ifNoneMatch) {
+      const clientTime = ifModifiedSince ? new Date(ifModifiedSince) : null;
+      if ((clientTime && lastModified <= clientTime) || ifNoneMatch === etag) {
+        return res.status(304).end();
+      }
+    }
+    
+    // Calculate turn timer
+    let turnTimeRemaining = 0;
+    if (game.state === 'active' && game.turnStartTime) {
+      const elapsed = Date.now() - game.turnStartTime.getTime();
+      turnTimeRemaining = Math.max(0, (game.turnTimeLimit || 30) * 1000 - elapsed);
+    }
+    
+    // Get recent moves for context
+    const recentMoves = await Move.find({ gameId: game._id })
+      .sort({ timestamp: -1 })
+      .limit(5)
+      .select('fromPlayer targetPlayer guess hits timestamp turnNumber');
+    
+    const playerStates = players.map(p => ({
+      name: p.name,
+      avatar: p.avatar,
+      isReady: p.isReady,
+      isConnected: p.isConnected,
+      isAlive: game.state === 'finished' ? (game.winner?.toString() === p._id.toString()) : true,
+      turnOrder: game.turnOrder.indexOf(p.name) + 1,
+      stats: {
+        guessesMade: p.stats?.guessesMade || 0,
+        correctGuesses: p.stats?.correctGuesses || 0,
+        gamesWon: p.stats?.gamesWon || 0
+      }
+    }));
+    
+    const gameplayState = {
+      game: {
+        code: game.code,
+        state: game.state,
+        digits: game.digits,
+        currentTurn: game.currentTurn,
+        turnTimeRemaining: Math.floor(turnTimeRemaining / 1000), // seconds
+        currentRound: game.currentRound || 1,
+        maxRounds: game.maxRounds,
+        winner: game.winner
+      },
+      players: playerStates,
+      turnOrder: game.turnOrder || [],
+      recentMoves: recentMoves.map(m => ({
+        player: m.fromPlayer,
+        target: m.targetPlayer,
+        hits: m.hits,
+        timestamp: m.timestamp,
+        turnNumber: m.turnNumber
+      })),
+      nextPollIn: game.state === 'active' ? 1000 : 3000, // ms
+      lastModified: lastModified.toISOString()
+    };
+    
+    // Set cache headers
+    res.set({
+      'Last-Modified': lastModified.toUTCString(),
+      'ETag': etag,
+      'Cache-Control': 'private, max-age=0'
+    });
+    
+    console.log(`✅ Gameplay state for ${code}: Turn=${game.currentTurn}, Round=${game.currentRound}`);
+    res.json(gameplayState);
+  } catch (error) {
+    console.error('Error getting gameplay state:', error);
+    res.status(500).json({ message: 'Failed to get gameplay state' });
+  }
+});
+
+// Get room state for polling (legacy endpoint)
 router.get('/rooms/:code/state', async (req, res) => {
   try {
     await ensureConnection();
@@ -533,13 +631,206 @@ router.post('/players/heartbeat', async (req, res) => {
   }
 });
 
+// Skip turn (timeout or voluntary)
+router.post('/rooms/:code/skip-turn', async (req, res) => {
+  try {
+    await ensureConnection();
+    
+    const { code } = req.params;
+    const { playerName, reason = 'voluntary' } = req.body;
+    
+    if (!playerName) {
+      return res.status(400).json({ message: 'Player name is required' });
+    }
+    
+    const game = await Game.findOne({ code, isActive: true });
+    if (!game) {
+      return res.status(404).json({ message: 'Room not found' });
+    }
+    
+    if (game.state !== 'active') {
+      return res.status(400).json({ message: 'Game is not active' });
+    }
+    
+    if (game.currentTurn !== playerName) {
+      return res.status(400).json({ message: 'Not your turn to skip' });
+    }
+    
+    // Advance to next player
+    const currentIndex = game.turnOrder.indexOf(playerName);
+    const nextIndex = (currentIndex + 1) % game.turnOrder.length;
+    const nextPlayer = game.turnOrder[nextIndex];
+    
+    game.currentTurn = nextPlayer;
+    game.turnStartTime = new Date();
+    
+    // Check if we completed a round
+    if (nextIndex === 0) {
+      game.currentRound++;
+      console.log(`🔄 Round ${game.currentRound} started in room ${code} (${playerName} skipped)`);
+    }
+    
+    await game.save();
+    await updateGameActivity(code);
+    
+    console.log(`⏭️ ${playerName} skipped turn (${reason}). Next: ${nextPlayer}`);
+    
+    res.json({
+      message: 'Turn skipped successfully',
+      nextPlayer,
+      currentRound: game.currentRound,
+      reason
+    });
+  } catch (error) {
+    console.error('Error skipping turn:', error);
+    res.status(500).json({ message: 'Failed to skip turn' });
+  }
+});
+
+// Get available targets for current player
+router.get('/rooms/:code/targets/:playerName', async (req, res) => {
+  try {
+    await ensureConnection();
+    
+    const { code, playerName } = req.params;
+    
+    const game = await Game.findOne({ code, isActive: true });
+    if (!game) {
+      return res.status(404).json({ message: 'Room not found' });
+    }
+    
+    if (game.state !== 'active') {
+      return res.status(400).json({ message: 'Game is not active' });
+    }
+    
+    // Get all players except the requesting player
+    const players = await Player.find({ 
+      gameId: game._id, 
+      name: { $ne: playerName },
+      secret: { $exists: true }
+    });
+    
+    // Get recent moves to show hit history
+    const recentMoves = await Move.find({ 
+      gameId: game._id,
+      fromPlayer: playerName 
+    }).sort({ timestamp: -1 });
+    
+    const availableTargets = players.map(p => {
+      const movesAgainstTarget = recentMoves.filter(m => m.targetPlayer === p.name);
+      const bestHits = movesAgainstTarget.length > 0 ? Math.max(...movesAgainstTarget.map(m => m.hits)) : 0;
+      
+      return {
+        name: p.name,
+        avatar: p.avatar,
+        isEliminated: false, // Could add elimination logic later
+        previousBestHits: bestHits,
+        totalGuessesAgainst: movesAgainstTarget.length
+      };
+    });
+    
+    res.json({ availableTargets });
+  } catch (error) {
+    console.error('Error getting targets:', error);
+    res.status(500).json({ message: 'Failed to get targets' });
+  }
+});
+
+// Long polling for game events
+router.get('/rooms/:code/events', async (req, res) => {
+  try {
+    await ensureConnection();
+    
+    const { code } = req.params;
+    const { lastEventId, timeout = 30 } = req.query;
+    
+    const game = await Game.findOne({ code, isActive: true });
+    if (!game) {
+      return res.status(404).json({ message: 'Room not found' });
+    }
+    
+    const timeoutMs = Math.min(parseInt(timeout as string) * 1000, 30000); // Max 30 seconds
+    const startTime = Date.now();
+    
+    // Simple long polling implementation
+    const checkForEvents = async (): Promise<any[]> => {
+      // Get recent moves as events
+      const query: any = { gameId: game._id };
+      if (lastEventId) {
+        query._id = { $gt: lastEventId };
+      }
+      
+      const moves = await Move.find(query)
+        .sort({ timestamp: 1 })
+        .limit(10);
+      
+      const events = moves.map(move => ({
+        id: move._id,
+        type: move.isWinning ? 'game_end' : 'guess_made',
+        player: move.fromPlayer,
+        target: move.targetPlayer,
+        timestamp: move.timestamp,
+        data: {
+          guess: move.guess,
+          hits: move.hits,
+          turnNumber: move.turnNumber,
+          round: move.round
+        }
+      }));
+      
+      // Check for turn changes
+      const currentGame = await Game.findById(game._id);
+      if (currentGame && currentGame.currentTurn !== game.currentTurn) {
+        events.push({
+          id: `turn-${Date.now()}`,
+          type: 'turn_start',
+          player: currentGame.currentTurn || '',
+          target: '',
+          timestamp: currentGame.turnStartTime || new Date(),
+          data: { 
+            guess: '',
+            hits: 0,
+            turnNumber: 0,
+            round: currentGame.currentRound || 1
+          }
+        });
+      }
+      
+      return events;
+    };
+    
+    // Poll for events with timeout
+    const poll = async (): Promise<void> => {
+      const events = await checkForEvents();
+      
+      if (events.length > 0 || Date.now() - startTime >= timeoutMs) {
+        const nextPoll = game.state === 'active' ? 1000 : 3000;
+        res.json({ 
+          events, 
+          nextPoll,
+          hasMore: events.length === 10 
+        });
+        return;
+      }
+      
+      // Wait 1 second before checking again
+      setTimeout(poll, 1000);
+    };
+    
+    await poll();
+  } catch (error) {
+    console.error('Error getting events:', error);
+    res.status(500).json({ message: 'Failed to get events' });
+  }
+});
+
 // Get recent moves for a room
 router.get('/rooms/:code/moves', async (req, res) => {
   try {
     await ensureConnection();
     
     const { code } = req.params;
-    const { since } = req.query;
+    const { since, page = 1, limit = 20 } = req.query;
     
     const game = await Game.findOne({ code, isActive: true });
     if (!game) {
@@ -551,11 +842,47 @@ router.get('/rooms/:code/moves', async (req, res) => {
       query.timestamp = { $gt: new Date(since as string) };
     }
     
-    const moves = await Move.find(query)
-      .sort({ timestamp: -1 })
-      .limit(50);
+    const pageNum = parseInt(page as string);
+    const limitNum = Math.min(parseInt(limit as string), 50);
+    const skip = (pageNum - 1) * limitNum;
     
-    res.json({ moves });
+    const [moves, total] = await Promise.all([
+      Move.find(query)
+        .sort({ timestamp: -1 })
+        .skip(skip)
+        .limit(limitNum),
+      Move.countDocuments(query)
+    ]);
+    
+    const avgGuessTime = await Move.aggregate([
+      { $match: query },
+      { $group: { _id: null, avgTime: { $avg: '$timeToGuess' } } }
+    ]);
+    
+    res.json({ 
+      moves: moves.map(m => ({
+        id: m._id,
+        fromPlayer: m.fromPlayer,
+        targetPlayer: m.targetPlayer,
+        guess: m.guess,
+        hits: m.hits,
+        timestamp: m.timestamp,
+        turnNumber: m.turnNumber,
+        round: m.round,
+        timeToGuess: Math.floor((m.timeToGuess || 0) / 1000), // seconds
+        isWinning: m.isWinning
+      })),
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum)
+      },
+      gameStats: {
+        totalMoves: total,
+        avgGuessTime: avgGuessTime[0]?.avgTime ? Math.floor(avgGuessTime[0].avgTime / 1000) : 0
+      }
+    });
   } catch (error) {
     console.error('Error getting moves:', error);
     res.status(500).json({ message: 'Failed to get moves' });

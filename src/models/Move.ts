@@ -15,6 +15,10 @@ export interface IMove extends Document {
   isWinning: boolean;
   timestamp: Date;
   createdAt: Date;
+  // Turn-based fields
+  turnNumber: number;            // which turn in the round
+  timeToGuess: number;           // milliseconds taken to make guess
+  turnToken?: string;            // validation token for this turn
 }
 
 const MoveSchema: Schema = new Schema({
@@ -31,7 +35,11 @@ const MoveSchema: Schema = new Schema({
   gamePhase: { type: String, default: 'active' },
   isWinning: { type: Boolean, default: false },
   timestamp: { type: Date, default: Date.now, index: true },
-  createdAt: { type: Date, default: Date.now }
+  createdAt: { type: Date, default: Date.now },
+  // Turn-based fields
+  turnNumber: { type: Number, required: true },
+  timeToGuess: { type: Number, default: 0 }, // in milliseconds
+  turnToken: { type: String }
 });
 
 // Indexes for performance

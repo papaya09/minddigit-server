@@ -19,6 +19,13 @@ export interface IGame extends Document {
     allowDuplicates: boolean;
   };
   isActive: boolean;
+  // Turn-based gameplay fields
+  currentTurn?: string;        // current player's name
+  turnOrder: string[];         // array of player names in turn order
+  turnStartTime?: Date;        // when current turn started
+  turnTimeLimit: number;       // seconds per turn
+  currentRound: number;        // current round number
+  maxRounds?: number;          // optional round limit
 }
 
 const GameSchema: Schema = new Schema({
@@ -39,7 +46,14 @@ const GameSchema: Schema = new Schema({
     timeLimit: { type: Number },
     allowDuplicates: { type: Boolean, default: false }
   },
-  isActive: { type: Boolean, default: true, index: true }
+  isActive: { type: Boolean, default: true, index: true },
+  // Turn-based gameplay fields
+  currentTurn: { type: String, index: true },
+  turnOrder: [{ type: String }],
+  turnStartTime: { type: Date },
+  turnTimeLimit: { type: Number, default: 30 }, // 30 seconds per turn
+  currentRound: { type: Number, default: 1 },
+  maxRounds: { type: Number }
 }, {
   timestamps: true
 });
