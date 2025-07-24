@@ -18,19 +18,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Player name is required' });
     }
 
-    // หาห้องที่รอผู้เล่น (มีคนเดียว)
+    // หาห้องที่รอผู้เล่น (มีคนน้อยกว่า 2 คน)
     let room = await Room.findOne({
       gameState: 'WAITING',
-      currentPlayerCount: 1,
+      currentPlayerCount: { $lt: 2 },
       isActive: true
-    });
+    }).sort({ createdAt: 1 }); // เลือกห้องที่เก่าที่สุดก่อน
+    
+    console.log('Found room:', room ? `${room.roomId} (${room.currentPlayerCount}/2)` : 'none');
 
     let playerId = uuidv4();
     let position = 1;
 
     if (room) {
       // เข้าห้องที่มีอยู่
-      position = 2;
+      position = room.currentPlayerCount + 1;
       
       // สร้างผู้เล่นคนที่ 2
       const player = new OnlinePlayer({
@@ -45,17 +47,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       
       // อัพเดทห้อง
       room.players.push(player._id);
-      room.currentPlayerCount = 2;
-      room.gameState = 'DIGIT_SELECTION';
+      room.currentPlayerCount = room.currentPlayerCount + 1;
+      room.gameState = room.currentPlayerCount >= 2 ? 'DIGIT_SELECTION' : 'WAITING';
       room.lastActivity = new Date();
       await room.save();
+      
+      console.log(`Player ${playerName} joined room ${room.roomId} as position ${position}`);
+      console.log(`Room now has ${room.currentPlayerCount} players, state: ${room.gameState}`);
       
       res.json({
         success: true,
         roomId: room.roomId,
         playerId,
         position,
-        gameState: 'DIGIT_SELECTION',
+        gameState: room.gameState,
         message: 'Joined existing room'
       });
     } else {
@@ -81,6 +86,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
       
       await room.save();
+      
+      console.log(`Created new room ${roomId} for player ${playerName}`);
       
       res.json({
         success: true,
