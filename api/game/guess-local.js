@@ -208,14 +208,32 @@ module.exports = (req, res) => {
     
     room.history.push(historyEntry);
     
+    // 🚨 NEW: Limit history to prevent memory issues and network errors
+    const MAX_HISTORY_ENTRIES = 50; // Keep last 50 moves
+    if (room.history.length > MAX_HISTORY_ENTRIES) {
+      // Keep only the most recent entries
+      room.history = room.history.slice(-MAX_HISTORY_ENTRIES);
+      console.log(`📝 History trimmed to ${MAX_HISTORY_ENTRIES} entries to prevent memory issues`);
+    }
+    
+    // 🚨 NEW: Auto-reset game if it's getting too long (prevent infinite games)
+    const MAX_TOTAL_TURNS = 100;
+    if (room.history.length >= MAX_TOTAL_TURNS) {
+      console.log('🔄 Game auto-reset due to excessive length');
+      room.gameState = 'FINISHED';
+      room.winner = null;
+      room.winnerName = 'Auto-Reset (Too Long)';
+      room.autoReset = true;
+    }
+    
     // Check for win condition
     const isWin = result.bulls === guessStr.length;
     if (isWin) {
       room.gameState = 'FINISHED';
       room.winner = playerId;
       room.winnerName = player.name;
-    } else {
-      // Switch turn to opponent
+    } else if (!room.autoReset) {
+      // Switch turn to opponent (only if not auto-reset)
       room.currentTurn = opponent.id;
     }
     

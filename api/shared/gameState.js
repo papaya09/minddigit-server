@@ -88,28 +88,87 @@ class GameStateManager {
     return room;
   }
   
-  // Clean old data
+  // Clean up old rooms and players
   cleanup() {
+    this.initializeStorage();
     const now = Date.now();
-    const TIMEOUT = 30 * 60 * 1000; // 30 minutes
+    const OLD_THRESHOLD = 3600000; // 1 hour
+    const VERY_OLD_THRESHOLD = 86400000; // 24 hours
     
-    // Clean old rooms
-    Object.keys(global.gameData.rooms).forEach(roomId => {
+    let roomsRemoved = 0;
+    let playersRemoved = 0;
+    
+    // 🚨 ENHANCED: More aggressive cleanup for old/broken data
+    for (const roomId in global.gameData.rooms) {
       const room = global.gameData.rooms[roomId];
-      if (now - (room.lastUpdated || 0) > TIMEOUT) {
+      const age = now - (room.lastUpdated || 0);
+      
+      // Remove very old rooms immediately
+      if (age > VERY_OLD_THRESHOLD) {
         delete global.gameData.rooms[roomId];
-        console.log('🧹 Cleaned up old room:', roomId);
+        roomsRemoved++;
+        continue;
       }
-    });
+      
+      // Remove rooms with corrupted state or excessive history
+      if (!room.players || room.players.length === 0 || 
+          (room.history && room.history.length > 200)) {
+        console.log(`🧹 Removing corrupted/oversized room: ${roomId}`);
+        delete global.gameData.rooms[roomId];
+        roomsRemoved++;
+        continue;
+      }
+      
+      // Remove old inactive rooms
+      if (age > OLD_THRESHOLD) {
+        delete global.gameData.rooms[roomId];
+        roomsRemoved++;
+      }
+    }
     
-    // Clean old players
-    Object.keys(global.gameData.players).forEach(playerId => {
+    // 🚨 ENHANCED: Clean up orphaned players
+    for (const playerId in global.gameData.players) {
       const player = global.gameData.players[playerId];
-      if (now - (player.lastUpdated || 0) > TIMEOUT) {
+      const age = now - (player.lastUpdated || 0);
+      
+      if (age > OLD_THRESHOLD) {
         delete global.gameData.players[playerId];
-        console.log('🧹 Cleaned up old player:', playerId.slice(0, 4));
+        playersRemoved++;
       }
-    });
+    }
+    
+    // 🚨 NEW: Memory compaction - recreate storage if too much data
+    const totalRooms = Object.keys(global.gameData.rooms).length;
+    const totalPlayers = Object.keys(global.gameData.players).length;
+    
+    if (totalRooms > 100 || totalPlayers > 200) {
+      console.log('🗜️ Performing memory compaction due to excessive data');
+      
+      // Keep only recent active data
+      const activeRooms = {};
+      const activePlayers = {};
+      
+      for (const roomId in global.gameData.rooms) {
+        const room = global.gameData.rooms[roomId];
+        if (room.lastUpdated && (now - room.lastUpdated) < OLD_THRESHOLD / 2) {
+          activeRooms[roomId] = room;
+        }
+      }
+      
+      for (const playerId in global.gameData.players) {
+        const player = global.gameData.players[playerId];
+        if (player.lastUpdated && (now - player.lastUpdated) < OLD_THRESHOLD / 2) {
+          activePlayers[playerId] = player;
+        }
+      }
+      
+      global.gameData.rooms = activeRooms;
+      global.gameData.players = activePlayers;
+    }
+    
+    if (roomsRemoved > 0 || playersRemoved > 0) {
+      console.log(`🧹 Cleanup completed: removed ${roomsRemoved} rooms, ${playersRemoved} players`);
+    }
   }
   
   // Validate game state
