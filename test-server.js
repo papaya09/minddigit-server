@@ -185,17 +185,16 @@ app.post('/api/room/join-local', (req, res) => {
       id: playerId, 
       name: playerName, 
       position: position,
-      secret: generateDeterministicSecret(availableRoomId, playerId), // Auto-generate secret for player 2
+      secret: null, // No auto-generation, player will set their own
       selectedDigits: null
     };
     availableRoom.players.push(newPlayer);
     availableRoom.currentPlayerCount = 2;
-    console.log('🔑 Auto-generated secret for player 2:', playerId.slice(0, 4));
+    console.log('✅ Player 2 joined, both players need to select digits and set secrets');
     
-    // Auto-start game when 2 players join (skip digit selection for instant play)
-    availableRoom.gameState = 'PLAYING';
-    availableRoom.currentTurn = availableRoom.players[0].id; // First player starts
-    console.log('🎮 Auto-starting game with 2 players in room:', availableRoomId);
+    // Start with digit selection when 2 players join
+    availableRoom.gameState = 'DIGIT_SELECTION';
+    console.log('🎮 2 players joined room:', availableRoomId, '- starting digit selection phase');
     
     // Store player
     players[playerId] = {
@@ -212,8 +211,8 @@ app.post('/api/room/join-local', (req, res) => {
       roomId: availableRoomId,
       playerId: playerId,
       position: position,
-      gameState: 'PLAYING',
-      message: 'Joined existing room - game started!',
+      gameState: 'DIGIT_SELECTION',
+      message: 'Joined existing room - ready to select digits!',
       fallbackMode: true,
       mode: 'test'
     });
@@ -440,29 +439,26 @@ app.post('/api/game/guess-local', (req, res) => {
     
     let player = room.players.find(p => p.id === playerId);
     if (!player) {
-        // Auto-add player if not found (Vercel serverless recovery)
-        console.log('🔄 Player not found, adding to room:', playerId);
-        player = {
-            id: playerId,
-            name: `Player-${playerId.slice(0, 4)}`,
-            position: room.players.length + 1,
-            secret: null,
-            selectedDigits: null
-        };
-        room.players.push(player);
+        return res.status(404).json({ 
+            success: false, 
+            error: 'Player not found in room' 
+        });
     }
     
-    // Auto-generate deterministic secret for player if missing (critical for game to work)
+    // Check if game is in PLAYING state
+    if (room.gameState !== 'PLAYING') {
+        return res.status(400).json({ 
+            success: false, 
+            error: `Game is not ready yet. Current state: ${room.gameState}. Please complete digit selection and secret setting first.` 
+        });
+    }
+    
+    // Check if player has set their secret
     if (!player.secret) {
-        player.secret = generateDeterministicSecret(roomId, playerId);
-        console.log('🔑 Auto-generated deterministic secret for player:', playerId.slice(0, 4), '-> secret set');
-    }
-    
-    // Auto-set game state for new rooms
-    if (room.gameState === 'WAITING' && room.players.length >= 1) {
-        room.gameState = 'PLAYING';
-        room.currentTurn = room.players[0].id; // First player starts
-        console.log('🎮 Auto-starting game for room:', roomId);
+        return res.status(400).json({ 
+            success: false, 
+            error: 'You must set your secret before making guesses' 
+        });
     }
     
     // Check if it's player's turn (allow first turn for recovery)
@@ -473,26 +469,20 @@ app.post('/api/game/guess-local', (req, res) => {
         });
     }
     
-    // Find opponent or create AI opponent for testing
+    // Find opponent 
     let opponent = room.players.find(p => p.id !== playerId);
     if (!opponent) {
-        // Create AI opponent for testing - use deterministic secret based on room
-        const deterministicSecret = generateDeterministicSecret(roomId, 'ai-opponent');
-        opponent = {
-            id: 'ai-opponent',
-            name: 'AI Opponent',
-            position: 2,
-            secret: deterministicSecret,
-            selectedDigits: null
-        };
-        room.players.push(opponent);
-        console.log('🤖 Created AI opponent with secret:', opponent.secret);
+        return res.status(400).json({ 
+            success: false, 
+            error: 'Opponent not found. Need 2 players to play.' 
+        });
     }
     
     if (!opponent.secret) {
-        // Generate deterministic secret to prevent changes during serverless restarts
-        opponent.secret = generateDeterministicSecret(roomId, opponent.id);
-        console.log('🔑 Restored deterministic secret for opponent:', opponent.secret);
+        return res.status(400).json({ 
+            success: false, 
+            error: 'Opponent has not set their secret yet' 
+        });
     }
     
     // Calculate bulls and cows
@@ -567,6 +557,57 @@ app.post('/api/game/select-digit-local', (req, res) => {
   });
 });
 
+// Select digit (new endpoint for iOS)
+app.post('/api/game/select-digit', (req, res) => {
+  const { roomId, playerId, digits } = req.body;
+  console.log('🔢 Digits selected:', digits, 'from player:', playerId, 'in room:', roomId);
+  
+  // Validate digits range
+  if (!digits || digits < 2 || digits > 6) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Digits must be between 2 and 6' 
+    });
+  }
+  
+  const room = rooms[roomId];
+  if (!room) {
+    return res.status(404).json({ success: false, error: 'Room not found' });
+  }
+  
+  if (room.gameState !== 'DIGIT_SELECTION') {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Invalid room state for digit selection' 
+    });
+  }
+  
+  // Find player and update their digit selection
+  const player = room.players.find(p => p.id === playerId);
+  if (!player) {
+    return res.status(404).json({ success: false, error: 'Player not found' });
+  }
+  
+  player.selectedDigits = digits;
+  console.log('✅ Player', player.name, 'selected', digits, 'digits');
+  
+  // Check if both players have selected digits
+  const allPlayersSelected = room.players.every(p => p.selectedDigits);
+  if (allPlayersSelected && room.players.length === 2) {
+    room.gameState = 'SECRET_SETTING';
+    room.currentDigits = digits; // Use the selected digits
+    console.log('🎯 Both players selected digits, moving to SECRET_SETTING');
+  }
+  
+  res.json({
+    success: true,
+    message: 'Digits selected successfully',
+    gameState: room.gameState,
+    selectedDigits: digits,
+    mode: 'test'
+  });
+});
+
 // Set secret (local)
 app.post('/api/game/set-secret-local', (req, res) => {
   const { roomId, playerId, secret } = req.body;
@@ -598,6 +639,89 @@ app.post('/api/game/set-secret-local', (req, res) => {
   res.json({
     success: true,
     message: 'Secret set successfully',
+    mode: 'test'
+  });
+});
+
+// Set secret (new endpoint for iOS)
+app.post('/api/game/set-secret', (req, res) => {
+  const { roomId, playerId, secret } = req.body;
+  console.log('🔐 Setting secret for player:', playerId, 'in room:', roomId, 'secret:', secret);
+  
+  const room = rooms[roomId];
+  if (!room) {
+    return res.status(404).json({ success: false, error: 'Room not found' });
+  }
+  
+  if (room.gameState !== 'SECRET_SETTING') {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Invalid room state for setting secret' 
+    });
+  }
+  
+  // Validate secret
+  if (!secret) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Secret is required' 
+    });
+  }
+  
+  const requiredDigits = room.currentDigits || 4;
+  
+  // Check secret length
+  if (secret.length !== requiredDigits) {
+    return res.status(400).json({ 
+      success: false, 
+      error: `Secret must be ${requiredDigits} digits` 
+    });
+  }
+  
+  // Check if all characters are digits
+  if (!/^\d+$/.test(secret)) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Secret must contain only numbers' 
+    });
+  }
+  
+  // Check for unique digits
+  if (new Set(secret).size !== secret.length) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Secret cannot have duplicate digits' 
+    });
+  }
+  
+  // Find player and set their secret
+  const player = room.players.find(p => p.id === playerId);
+  if (!player) {
+    return res.status(404).json({ success: false, error: 'Player not found' });
+  }
+  
+  player.secret = secret;
+  player.isReady = true;
+  console.log('✅ Player', player.name, 'set secret:', secret);
+  
+  // Check if both players have set their secrets
+  const playersWithSecrets = room.players.filter(p => p.secret);
+  const allReady = playersWithSecrets.length === 2;
+  
+  if (allReady) {
+    room.gameState = 'PLAYING';
+    // Set random first turn
+    const firstPlayer = room.players[Math.floor(Math.random() * room.players.length)];
+    room.currentTurn = firstPlayer.id;
+    console.log('🎮 Both players set secrets, starting game!');
+    console.log('🎯 First turn goes to:', firstPlayer.name, '(ID:', firstPlayer.id, ')');
+  }
+  
+  res.json({
+    success: true,
+    gameState: room.gameState,
+    yourSecret: secret,
+    message: allReady ? 'Game started!' : 'Waiting for other player to set secret',
     mode: 'test'
   });
 });
