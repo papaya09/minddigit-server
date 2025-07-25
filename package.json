@@ -1,28 +1,22 @@
 {
-  "name": "minddigits-server",
+  "name": "minddigit-server",
   "version": "1.0.0",
-  "description": "MindDigits Number Game Backend - Simple Test Server",
+  "description": "Bulls and Cows multiplayer server for MindDigits game",
   "main": "test-server.js",
   "scripts": {
     "start": "node test-server.js",
-    "dev": "node test-server.js",
-    "build": "echo 'No build step required - using test-server.js directly'"
+    "build": "echo 'No build step required for Express server'"
   },
   "dependencies": {
-    "express": "^4.19.2",
+    "express": "^4.18.2",
     "cors": "^2.8.5",
-    "uuid": "^11.1.0",
-    "@vercel/node": "^5.3.6"
+    "uuid": "^9.0.0",
+    "@vercel/node": "^3.0.21"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "18.x"
   },
-  "keywords": [
-    "game",
-    "number-game",
-    "multiplayer",
-    "websocket"
-  ],
-  "author": "Your Name",
+  "keywords": ["express", "game", "multiplayer", "bulls-and-cows"],
+  "author": "minddigit",
   "license": "MIT"
 }

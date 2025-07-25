@@ -4,6 +4,9 @@ const cors = require('cors');
 // Store rooms in memory for local testing
 const rooms = {};
 
+// In-memory player storage  
+const players = {};
+
 // Utility function to calculate bulls and cows
 function calculateBullsAndCows(guess, secret) {
     let bulls = 0;
