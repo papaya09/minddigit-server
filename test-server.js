@@ -66,6 +66,46 @@ function generatePlayerId() {
   return Math.random().toString(36).substring(2, 10);
 }
 
+// Generate deterministic secret to prevent changes during serverless restarts
+function generateDeterministicSecret(roomId, playerId) {
+    // Simple hash function using roomId + playerId as seed
+    let hash = 0;
+    const input = roomId + playerId + 'secret';
+    for (let i = 0; i < input.length; i++) {
+        const char = input.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32-bit integer
+    }
+    
+    // Ensure positive number and convert to 4-digit string
+    hash = Math.abs(hash);
+    const secret = (1000 + (hash % 9000)).toString();
+    
+    // Ensure no duplicate digits for valid game secret
+    const digits = secret.split('');
+    const uniqueDigits = [...new Set(digits)];
+    
+    if (uniqueDigits.length === 4) {
+        return secret;
+    } else {
+        // Fallback: create 4 unique digits from hash
+        const available = '0123456789';
+        let result = '';
+        let seedValue = hash;
+        
+        while (result.length < 4) {
+            const index = seedValue % available.length;
+            const digit = available[index];
+            if (!result.includes(digit)) {
+                result += digit;
+            }
+            seedValue = Math.floor(seedValue / 10) + 1; // Change seed for next iteration
+        }
+        
+        return result;
+    }
+}
+
 // Clean up old rooms periodically
 function cleanupOldRooms() {
   const now = Date.now();
@@ -141,13 +181,21 @@ app.post('/api/room/join-local', (req, res) => {
   if (availableRoom) {
     // Join existing room as player 2
     const position = 2;
-    availableRoom.players.push({ 
+    const newPlayer = { 
       id: playerId, 
       name: playerName, 
-      position: position 
-    });
+      position: position,
+      secret: generateDeterministicSecret(availableRoomId, playerId), // Auto-generate secret for player 2
+      selectedDigits: null
+    };
+    availableRoom.players.push(newPlayer);
     availableRoom.currentPlayerCount = 2;
-    availableRoom.gameState = 'DIGIT_SELECTION'; // Move to next phase when 2 players joined
+    console.log('🔑 Auto-generated secret for player 2:', playerId.slice(0, 4));
+    
+    // Auto-start game when 2 players join (skip digit selection for instant play)
+    availableRoom.gameState = 'PLAYING';
+    availableRoom.currentTurn = availableRoom.players[0].id; // First player starts
+    console.log('🎮 Auto-starting game with 2 players in room:', availableRoomId);
     
     // Store player
     players[playerId] = {
@@ -164,8 +212,8 @@ app.post('/api/room/join-local', (req, res) => {
       roomId: availableRoomId,
       playerId: playerId,
       position: position,
-      gameState: 'DIGIT_SELECTION',
-      message: 'Joined existing room - ready to play!',
+      gameState: 'PLAYING',
+      message: 'Joined existing room - game started!',
       fallbackMode: true,
       mode: 'test'
     });
@@ -226,13 +274,15 @@ app.get('/api/room/status-local', (req, res) => {
     
     // Add player if provided
     if (playerId) {
-      room.players.push({
+      const newPlayer = {
         id: playerId,
         name: `Player-${playerId.slice(0, 4)}`,
         position: room.players.length + 1,
-        secret: null,
+        secret: generateDeterministicSecret(roomId, playerId), // Auto-generate secret immediately
         selectedDigits: null
-      });
+      };
+      room.players.push(newPlayer);
+      console.log('🔑 Auto-generated secret for new player:', playerId.slice(0, 4));
     }
   }
   
@@ -250,12 +300,52 @@ app.get('/api/room/status-local', (req, res) => {
         ...(p.secret && { secret: p.secret })
       })),
       currentPlayerCount: room.players.length,
-      ...(room.currentTurn && { currentTurn: room.currentTurn })
+      currentTurn: room.currentTurn || null // Always include currentTurn field
     },
     mode: 'test'
   };
   
   res.json(response);
+});
+
+// Assign turn (local)
+app.post('/api/game/assign-turn-local', (req, res) => {
+  const { roomId, playerId, turnPlayer } = req.body;
+  console.log('🎯 Assign turn request:', { roomId, playerId, turnPlayer });
+  
+  if (!roomId || !playerId || !turnPlayer) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Missing required fields' 
+    });
+  }
+  
+  const room = rooms[roomId];
+  if (!room) {
+    return res.status(404).json({ 
+      success: false, 
+      error: 'Room not found' 
+    });
+  }
+  
+  // Verify turnPlayer is valid player in room
+  const turnPlayerExists = room.players.find(p => p.id === turnPlayer);
+  if (!turnPlayerExists) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Invalid turn player' 
+    });
+  }
+  
+  // Assign turn
+  room.currentTurn = turnPlayer;
+  console.log('✅ Turn assigned to:', turnPlayer, 'in room:', roomId);
+  
+  res.json({
+    success: true,
+    currentTurn: room.currentTurn,
+    message: `Turn assigned to ${turnPlayerExists.name}`
+  });
 });
 
 // Game state (local)
@@ -362,6 +452,12 @@ app.post('/api/game/guess-local', (req, res) => {
         room.players.push(player);
     }
     
+    // Auto-generate deterministic secret for player if missing (critical for game to work)
+    if (!player.secret) {
+        player.secret = generateDeterministicSecret(roomId, playerId);
+        console.log('🔑 Auto-generated deterministic secret for player:', playerId.slice(0, 4), '-> secret set');
+    }
+    
     // Auto-set game state for new rooms
     if (room.gameState === 'WAITING' && room.players.length >= 1) {
         room.gameState = 'PLAYING';
@@ -380,12 +476,13 @@ app.post('/api/game/guess-local', (req, res) => {
     // Find opponent or create AI opponent for testing
     let opponent = room.players.find(p => p.id !== playerId);
     if (!opponent) {
-        // Create AI opponent for testing
+        // Create AI opponent for testing - use deterministic secret based on room
+        const deterministicSecret = generateDeterministicSecret(roomId, 'ai-opponent');
         opponent = {
             id: 'ai-opponent',
             name: 'AI Opponent',
             position: 2,
-            secret: Math.floor(1000 + Math.random() * 9000).toString(), // Random 4-digit
+            secret: deterministicSecret,
             selectedDigits: null
         };
         room.players.push(opponent);
@@ -393,9 +490,9 @@ app.post('/api/game/guess-local', (req, res) => {
     }
     
     if (!opponent.secret) {
-        // Generate secret for opponent if missing
-        opponent.secret = Math.floor(1000 + Math.random() * 9000).toString();
-        console.log('🔢 Generated secret for opponent:', opponent.secret);
+        // Generate deterministic secret to prevent changes during serverless restarts
+        opponent.secret = generateDeterministicSecret(roomId, opponent.id);
+        console.log('🔑 Restored deterministic secret for opponent:', opponent.secret);
     }
     
     // Calculate bulls and cows
