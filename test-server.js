@@ -478,10 +478,16 @@ app.post('/api/game/guess-local', (req, res) => {
     
     // Check if game is in PLAYING state
     if (room.gameState !== 'PLAYING') {
-        return res.status(400).json({ 
-            success: false, 
-            error: `Game is not ready yet. Current state: ${room.gameState}. Please complete digit selection and secret setting first.` 
-        });
+        // 🎯 ALLOW PRACTICE MODE: Loser can continue guessing alone
+        if (room.gameState === 'WINNER_ANNOUNCED' && room.winner && room.winner.playerId !== playerId) {
+            console.log(`🎯 ${player.name} practicing after losing`);
+            // Allow loser to continue guessing (practice mode)
+        } else {
+            return res.status(400).json({ 
+                success: false, 
+                error: `Game is not ready yet. Current state: ${room.gameState}. Please complete digit selection and secret setting first.` 
+            });
+        }
     }
     
     // Check if player has set their secret
@@ -536,10 +542,30 @@ app.post('/api/game/guess-local', (req, res) => {
         timestamp: new Date().toISOString()
     });
     
-    // Switch turn to opponent
-    room.currentTurn = opponent.id;
+    // 🎯 CHECK FOR WINNER
+    const isWinningGuess = result.bulls === guess.length;
+    let gameState = room.gameState;
+    let winner = null;
     
-    console.log(`🔄 Turn switched to ${opponent.name} (${opponent.id})`);
+    if (isWinningGuess) {
+        // Player won!
+        gameState = 'WINNER_ANNOUNCED';
+        winner = {
+            playerId: playerId,
+            playerName: player.name,
+            secret: opponent.secret, // Reveal opponent's secret
+            winningGuess: guess
+        };
+        room.winner = winner;
+        room.gameState = gameState;
+        room.currentTurn = null; // No more turns in normal flow
+        
+        console.log(`🏆 ${player.name} WON with guess ${guess}! Secret was ${opponent.secret}`);
+    } else {
+        // Switch turn to opponent
+        room.currentTurn = opponent.id;
+        console.log(`🔄 Turn switched to ${opponent.name} (${opponent.id})`);
+    }
     
     res.json({
         success: true,
@@ -547,9 +573,98 @@ app.post('/api/game/guess-local', (req, res) => {
             guess: parseInt(guess),
             bulls: result.bulls,
             cows: result.cows,
-            isCorrect: result.bulls === guess.length ? 1 : 0
+            isCorrect: isWinningGuess ? 1 : 0
         },
         currentTurn: room.currentTurn,
+        gameState: gameState,
+        winner: winner,
+        mode: 'test'
+    });
+});
+
+// 🎯 START REMATCH - Reset game for the same players
+app.post('/api/game/rematch-local', (req, res) => {
+    const { roomId, playerId } = req.body;
+    
+    if (!roomId || !playerId) {
+        return res.status(400).json({ 
+            success: false, 
+            error: 'Missing roomId or playerId' 
+        });
+    }
+    
+    const room = rooms[roomId];
+    if (!room) {
+        return res.status(404).json({ 
+            success: false, 
+            error: 'Room not found' 
+        });
+    }
+    
+    // Reset game state for rematch
+    room.gameState = 'DIGIT_SELECTION';
+    room.currentTurn = null;
+    room.history = [];
+    room.winner = null;
+    
+    // Reset player secrets and digit selections
+    room.players.forEach(player => {
+        player.secret = null;
+        player.selectedDigits = null;
+    });
+    
+    console.log(`🔄 Rematch started in room ${roomId} by ${playerId}`);
+    
+    res.json({
+        success: true,
+        gameState: room.gameState,
+        message: 'Rematch started! Select digits to begin.',
+        mode: 'test'
+    });
+});
+
+// 🎯 LOSER FOUND SECRET - Mark practice as complete
+app.post('/api/game/practice-complete-local', (req, res) => {
+    const { roomId, playerId, discoveredSecret } = req.body;
+    
+    if (!roomId || !playerId) {
+        return res.status(400).json({ 
+            success: false, 
+            error: 'Missing roomId or playerId' 
+        });
+    }
+    
+    const room = rooms[roomId];
+    if (!room || room.gameState !== 'WINNER_ANNOUNCED') {
+        return res.status(400).json({ 
+            success: false, 
+            error: 'Invalid room state for practice completion' 
+        });
+    }
+    
+    // Verify this is the loser
+    if (room.winner && room.winner.playerId === playerId) {
+        return res.status(400).json({ 
+            success: false, 
+            error: 'Winner cannot complete practice mode' 
+        });
+    }
+    
+    // Mark practice as complete
+    room.practiceComplete = {
+        playerId: playerId,
+        discoveredSecret: discoveredSecret,
+        timestamp: new Date().toISOString()
+    };
+    
+    console.log(`🎯 ${playerId} completed practice and discovered secret: ${discoveredSecret}`);
+    
+    res.json({
+        success: true,
+        message: 'Practice completed! You discovered the secret.',
+        discoveredSecret: discoveredSecret,
+        correctSecret: room.winner.secret,
+        isCorrect: discoveredSecret === room.winner.secret,
         mode: 'test'
     });
 });
