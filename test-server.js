@@ -37,7 +37,6 @@ function calculateBullsAndCows(guess, secret) {
 }
 
 const app = express();
-const PORT = process.env.PORT || 3001;
 
 // Enable CORS for all routes
 app.use(cors({
@@ -131,9 +130,6 @@ function cleanupOldRooms() {
 setInterval(cleanupOldRooms, 5 * 60 * 1000);
 
 console.log('🚀 Test Server starting...');
-console.log('📱 Local: http://localhost:' + PORT);
-console.log('🌐 Network: http://192.168.1.140:' + PORT);
-console.log('🧪 Test: http://192.168.1.140:' + PORT + '/api/health');
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -151,8 +147,8 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    ip: '192.168.1.140',
-    port: PORT,
+    message: 'MindDigits Test Server',
+    mode: 'test',
     activeRooms: Object.keys(rooms).length,
     activePlayers: Object.keys(players).length
   });
@@ -752,6 +748,5 @@ app.all('/api/*', (req, res) => {
   });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log('✅ All endpoints ready');
-}); 
+// Export app for Vercel
+module.exports = app; 
