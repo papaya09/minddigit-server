@@ -54,55 +54,12 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Simple in-memory storage
-let players = {};
-
 function generateRoomId() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
 function generatePlayerId() {
   return Math.random().toString(36).substring(2, 10);
-}
-
-// Generate deterministic secret to prevent changes during serverless restarts
-function generateDeterministicSecret(roomId, playerId) {
-    // Simple hash function using roomId + playerId as seed
-    let hash = 0;
-    const input = roomId + playerId + 'secret';
-    for (let i = 0; i < input.length; i++) {
-        const char = input.charCodeAt(i);
-        hash = ((hash << 5) - hash) + char;
-        hash = hash & hash; // Convert to 32-bit integer
-    }
-    
-    // Ensure positive number and convert to 4-digit string
-    hash = Math.abs(hash);
-    const secret = (1000 + (hash % 9000)).toString();
-    
-    // Ensure no duplicate digits for valid game secret
-    const digits = secret.split('');
-    const uniqueDigits = [...new Set(digits)];
-    
-    if (uniqueDigits.length === 4) {
-        return secret;
-    } else {
-        // Fallback: create 4 unique digits from hash
-        const available = '0123456789';
-        let result = '';
-        let seedValue = hash;
-        
-        while (result.length < 4) {
-            const index = seedValue % available.length;
-            const digit = available[index];
-            if (!result.includes(digit)) {
-                result += digit;
-            }
-            seedValue = Math.floor(seedValue / 10) + 1; // Change seed for next iteration
-        }
-        
-        return result;
-    }
 }
 
 // Clean up old rooms periodically
@@ -267,17 +224,34 @@ app.get('/api/room/status-local', (req, res) => {
     };
     rooms[roomId] = room;
     
-    // Add player if provided
+    // Add player if provided (but DO NOT auto-generate secret)
     if (playerId) {
+      // Check if player already exists
+      let existingPlayer = room.players.find(p => p.id === playerId);
+      if (!existingPlayer) {
+        const newPlayer = {
+          id: playerId,
+          name: `Player-${playerId.slice(0, 4)}`,
+          position: room.players.length + 1,
+          secret: null, // No auto-generation! Player must set their own secret
+          selectedDigits: null
+        };
+        room.players.push(newPlayer);
+        console.log('✅ Added player without auto-generating secret:', playerId.slice(0, 4));
+      }
+    }
+  } else {
+    // Room exists - check if player needs to be added (without auto-secret)
+    if (playerId && !room.players.find(p => p.id === playerId)) {
       const newPlayer = {
         id: playerId,
         name: `Player-${playerId.slice(0, 4)}`,
         position: room.players.length + 1,
-        secret: generateDeterministicSecret(roomId, playerId), // Auto-generate secret immediately
+        secret: null, // No auto-generation! Player must set their own secret
         selectedDigits: null
       };
       room.players.push(newPlayer);
-      console.log('🔑 Auto-generated secret for new player:', playerId.slice(0, 4));
+      console.log('✅ Added missing player without auto-generating secret:', playerId.slice(0, 4));
     }
   }
   
@@ -703,6 +677,11 @@ app.post('/api/game/set-secret', (req, res) => {
   // Check if both players have set their secrets
   const playersWithSecrets = room.players.filter(p => p.secret);
   const allReady = playersWithSecrets.length === 2;
+  
+  console.log(`🔐 Secret status: ${playersWithSecrets.length}/2 players have secrets`);
+  room.players.forEach(p => {
+    console.log(`   Player ${p.name}: secret=${p.secret ? 'SET' : 'NOT_SET'}`);
+  });
   
   if (allReady) {
     room.gameState = 'PLAYING';
