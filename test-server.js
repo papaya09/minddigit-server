@@ -384,6 +384,64 @@ app.get('/api/game/history-local', (req, res) => {
     });
 });
 
+// 🎯 INCREMENTAL HISTORY - Only returns new entries since lastEntryIndex
+app.get('/api/game/history-incremental', (req, res) => {
+    const { roomId, playerId, lastEntryIndex } = req.query;
+    
+    if (!roomId || !playerId) {
+        return res.status(400).json({ 
+            success: false, 
+            error: 'Missing roomId or playerId' 
+        });
+    }
+    
+    const room = rooms[roomId];
+    if (!room || !room.history) {
+        return res.json({
+            success: true,
+            newEntries: [],
+            totalEntries: 0,
+            hasNewData: false,
+            serverTime: new Date().toISOString()
+        });
+    }
+    
+    const lastIndex = parseInt(lastEntryIndex) || -1;
+    const newEntries = room.history.slice(lastIndex + 1);
+    
+    // Format new entries with player names
+    const formattedNewEntries = newEntries.map(entry => ({
+        playerName: entry.playerName || `Player ${entry.playerId.slice(-4)}`,
+        guess: entry.guess,
+        bulls: entry.bulls,
+        cows: entry.cows,
+        timestamp: entry.timestamp
+    }));
+    
+    console.log(`📜 Incremental history: Room ${roomId}, last index: ${lastIndex}, new entries: ${formattedNewEntries.length}`);
+    
+    // Check for game winner
+    let winner = null;
+    if (room.gameState === 'FINISHED' && room.winner) {
+        winner = {
+            playerId: room.winner.playerId,
+            playerName: room.winner.playerName || 'Player'
+        };
+    }
+    
+    res.json({
+        success: true,
+        newEntries: formattedNewEntries,
+        totalEntries: room.history.length,
+        hasNewData: formattedNewEntries.length > 0,
+        currentIndex: room.history.length - 1,
+        winner: winner,
+        gameState: room.gameState,
+        serverTime: new Date().toISOString(),
+        mode: 'test'
+    });
+});
+
 // Make a guess
 app.post('/api/game/guess-local', (req, res) => {
     const { roomId, playerId, guess } = req.body;
