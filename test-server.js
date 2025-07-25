@@ -476,8 +476,8 @@ app.post('/api/game/guess-local', (req, res) => {
         });
     }
     
-    // Check if game is in PLAYING state or CONTINUE_SOLO
-    if (room.gameState !== 'PLAYING' && room.gameState !== 'CONTINUE_SOLO') {
+    // Check if game is in PLAYING state
+    if (room.gameState !== 'PLAYING') {
         return res.status(400).json({ 
             success: false, 
             error: `Game is not ready yet. Current state: ${room.gameState}. Please complete digit selection and secret setting first.` 
@@ -500,56 +500,26 @@ app.post('/api/game/guess-local', (req, res) => {
         });
     }
     
-    // 🎯 HANDLE SOLO MODE vs NORMAL MODE
-    let opponent;
-    let targetSecret;
+    // Find opponent 
+    let opponent = room.players.find(p => p.id !== playerId);
+    if (!opponent) {
+        return res.status(400).json({ 
+            success: false, 
+            error: 'Opponent not found. Need 2 players to play.' 
+        });
+    }
     
-    if (room.gameState === 'CONTINUE_SOLO') {
-        // Solo mode: player is guessing the winner's secret
-        if (!room.soloPlayer || room.soloPlayer.playerId !== playerId) {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'You are not authorized for solo mode' 
-            });
-        }
-        
-        // In solo mode, "opponent" is the winner whose secret we're guessing
-        const winner = room.players.find(p => p.id === room.winner.playerId);
-        if (!winner) {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'Winner not found for solo mode' 
-            });
-        }
-        
-        opponent = winner;
-        targetSecret = room.soloTarget || winner.secret;
-        console.log(`🎯 Solo mode: ${player.name} guessing ${winner.name}'s secret`);
-        
-    } else {
-        // Normal mode: find opponent 
-        opponent = room.players.find(p => p.id !== playerId);
-        if (!opponent) {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'Opponent not found. Need 2 players to play.' 
-            });
-        }
-        
-        if (!opponent.secret) {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'Opponent has not set their secret yet' 
-            });
-        }
-        
-        targetSecret = opponent.secret;
+    if (!opponent.secret) {
+        return res.status(400).json({ 
+            success: false, 
+            error: 'Opponent has not set their secret yet' 
+        });
     }
     
     // Calculate bulls and cows
-    const result = calculateBullsAndCows(guess, targetSecret);
+    const result = calculateBullsAndCows(guess, opponent.secret);
     
-    console.log(`🎯 ${player.name} guessed ${guess} vs ${targetSecret}: ${result.bulls}B ${result.cows}C`);
+    console.log(`🎯 ${player.name} guessed ${guess} vs ${opponent.secret}: ${result.bulls}B ${result.cows}C`);
     
     // Initialize history if needed
     if (!room.history) {
@@ -566,43 +536,10 @@ app.post('/api/game/guess-local', (req, res) => {
         timestamp: new Date().toISOString()
     });
     
-    // 🎯 CHECK FOR WINNER
-    let gameFinished = false;
-    let winner = null;
-    if (result.bulls === guess.length) {
-        // Player guessed correctly - they win!
-        gameFinished = true;
-        winner = {
-            playerId: playerId,
-            playerName: player.name,
-            secret: player.secret,
-            guessedSecret: targetSecret
-        };
-        room.gameState = 'FINISHED';
-        room.winner = winner;
-        
-        console.log(`🏆 ${player.name} WINS! Guessed ${targetSecret} correctly!`);
-    }
+    // Switch turn to opponent
+    room.currentTurn = opponent.id;
     
-    // 🎯 TURN MANAGEMENT: Solo vs Normal mode
-    if (!gameFinished) {
-        if (room.gameState === 'CONTINUE_SOLO') {
-            // Solo mode: same player continues (no turn switching)
-            room.currentTurn = playerId;
-            console.log(`🔄 Solo mode: ${player.name} continues guessing`);
-        } else {
-            // Normal mode: switch turn to opponent
-            room.currentTurn = opponent.id;
-            console.log(`🔄 Turn switched to ${opponent.name} (${opponent.id})`);
-        }
-    } else {
-        room.currentTurn = null; // No more turns
-        if (room.gameState === 'CONTINUE_SOLO') {
-            console.log(`🏁 Solo mission complete! ${player.name} found the secret: ${targetSecret}`);
-        } else {
-            console.log(`🏁 Game finished! Winner: ${winner.playerName}`);
-        }
-    }
+    console.log(`🔄 Turn switched to ${opponent.name} (${opponent.id})`);
     
     res.json({
         success: true,
@@ -612,80 +549,7 @@ app.post('/api/game/guess-local', (req, res) => {
             cows: result.cows,
             isCorrect: result.bulls === guess.length ? 1 : 0
         },
-        gameFinished: gameFinished,
-        winner: winner,
         currentTurn: room.currentTurn,
-        gameState: room.gameState,
-        mode: 'test'
-    });
-});
-
-// 🎯 CONTINUE SOLO MODE - Loser can continue guessing alone
-app.post('/api/game/continue-solo', (req, res) => {
-    const { roomId, playerId } = req.body;
-    
-    if (!roomId || !playerId) {
-        return res.status(400).json({ 
-            success: false, 
-            error: 'Missing roomId or playerId' 
-        });
-    }
-    
-    const room = rooms[roomId];
-    if (!room) {
-        return res.status(404).json({ 
-            success: false, 
-            error: 'Room not found' 
-        });
-    }
-    
-    // Check if game is finished and player is not the winner
-    if (room.gameState !== 'FINISHED' || !room.winner) {
-        return res.status(400).json({ 
-            success: false, 
-            error: 'Game must be finished to continue solo' 
-        });
-    }
-    
-    if (room.winner.playerId === playerId) {
-        return res.status(400).json({ 
-            success: false, 
-            error: 'Winner cannot continue solo - you already won!' 
-        });
-    }
-    
-    const loser = room.players.find(p => p.id === playerId);
-    const winner = room.players.find(p => p.id === room.winner.playerId);
-    
-    if (!loser || !winner) {
-        return res.status(404).json({ 
-            success: false, 
-            error: 'Player not found' 
-        });
-    }
-    
-    // Set solo mode
-    room.gameState = 'CONTINUE_SOLO';
-    room.currentTurn = playerId; // Loser can continue guessing
-    room.soloTarget = winner.secret; // Target to guess
-    room.soloPlayer = {
-        playerId: playerId,
-        playerName: loser.name,
-        targetSecret: winner.secret,
-        targetPlayerName: winner.name
-    };
-    
-    console.log(`🔄 ${loser.name} continues solo to guess ${winner.name}'s secret: ${winner.secret}`);
-    
-    res.json({
-        success: true,
-        message: `Continue solo mode activated! Try to guess ${winner.name}'s secret.`,
-        gameState: room.gameState,
-        currentTurn: room.currentTurn,
-        soloTarget: {
-            playerName: winner.name,
-            secretLength: winner.secret.length
-        },
         mode: 'test'
     });
 });
