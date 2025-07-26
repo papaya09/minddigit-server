@@ -572,6 +572,9 @@ app.post('/api/game/guess-local', (req, res) => {
 
 // Vote for continue guessing mode
 app.post('/api/game/vote-continue', (req, res) => {
+  console.log('🚀 Vote endpoint hit! Method:', req.method, 'URL:', req.url);
+  console.log('🚀 Request body:', req.body);
+  
   const { roomId, playerId, vote } = req.body;
   console.log('🗳️ Continue guessing vote:', { roomId, playerId, vote });
   
