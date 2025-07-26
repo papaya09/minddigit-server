@@ -663,10 +663,10 @@ app.post('/api/game/opponent-secret', (req, res) => {
     return res.status(404).json({ success: false, error: 'Room not found' });
   }
   
-  // Verify game is finished
-  if (room.gameState !== 'FINISHED') {
-    console.log('❌ Game not finished yet. Current state:', room.gameState);
-    return res.json({ success: false, error: 'Game not finished yet' });
+  // Verify game is finished or in continue guessing mode
+  if (room.gameState !== 'FINISHED' && room.gameState !== 'CONTINUE_GUESSING') {
+    console.log('❌ Game not ready for opponent secret request. Current state:', room.gameState);
+    return res.json({ success: false, error: 'Game not ready for opponent secret request' });
   }
   
   // Find requester and opponent
