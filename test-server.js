@@ -215,34 +215,14 @@ app.get('/api/room/status-local', (req, res) => {
   
   let room = rooms[roomId];
   if (!room) {
-    // Auto-create room if not found (Vercel serverless recovery)
-    console.log('🔄 Room not found, creating new room:', roomId);
-    room = {
-      id: roomId,
-      players: [],
-      gameState: 'WAITING',
-      currentTurn: 0,
-      guessHistory: [],
+    // Return error for room not found instead of auto-creating
+    console.log('❌ Room not found:', roomId);
+    return res.status(404).json({
+      success: false,
+      error: 'Room not found. Please rejoin the game.',
+      shouldRejoin: true,
       mode: 'test'
-    };
-    rooms[roomId] = room;
-    
-    // Add player if provided (but DO NOT auto-generate secret)
-    if (playerId) {
-      // Check if player already exists
-      let existingPlayer = room.players.find(p => p.id === playerId);
-      if (!existingPlayer) {
-        const newPlayer = {
-          id: playerId,
-          name: `Player-${playerId.slice(0, 4)}`,
-          position: room.players.length + 1,
-          secret: null, // No auto-generation! Player must set their own secret
-          selectedDigits: null
-        };
-        room.players.push(newPlayer);
-        console.log('✅ Added player without auto-generating secret:', playerId.slice(0, 4));
-      }
-    }
+    });
   } else {
     // Room exists - DO NOT add duplicate players via status check
     // Players should only be added via join-local endpoint
@@ -446,17 +426,12 @@ app.post('/api/game/guess-local', (req, res) => {
     
     let room = rooms[roomId];
     if (!room) {
-        // Auto-create room if not found (Vercel serverless recovery)
-        console.log('🔄 Room not found, creating new room for guess:', roomId);
-        room = {
-            id: roomId,
-            players: [],
-            gameState: 'WAITING',
-            currentTurn: 0,
-            guessHistory: [],
-            mode: 'test'
-        };
-        rooms[roomId] = room;
+        console.log('❌ Room not found for guess:', roomId);
+        return res.status(404).json({ 
+            success: false, 
+            error: 'Room not found. Please rejoin the game.',
+            shouldRejoin: true
+        });
     }
     
     let player = room.players.find(p => p.id === playerId);
