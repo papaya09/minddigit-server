@@ -244,18 +244,9 @@ app.get('/api/room/status-local', (req, res) => {
       }
     }
   } else {
-    // Room exists - check if player needs to be added (without auto-secret)
-    if (playerId && !room.players.find(p => p.id === playerId)) {
-      const newPlayer = {
-        id: playerId,
-        name: `Player-${playerId.slice(0, 4)}`,
-        position: room.players.length + 1,
-        secret: null, // No auto-generation! Player must set their own secret
-        selectedDigits: null
-      };
-      room.players.push(newPlayer);
-      console.log('✅ Added missing player without auto-generating secret:', playerId.slice(0, 4));
-    }
+    // Room exists - DO NOT add duplicate players via status check
+    // Players should only be added via join-local endpoint
+    console.log('✅ Room exists with', room.players.length, 'players, gameState:', room.gameState);
   }
   
   // Prepare response with current turn info
@@ -673,10 +664,10 @@ app.post('/api/game/select-digit', (req, res) => {
   console.log('🔢 Digits selected:', digits, 'from player:', playerId, 'in room:', roomId);
   
   // Validate digits range
-  if (!digits || digits < 2 || digits > 6) {
+  if (!digits || digits < 1 || digits > 4) {
     return res.status(400).json({ 
       success: false, 
-      error: 'Digits must be between 2 and 6' 
+      error: 'Digits must be between 1 and 4' 
     });
   }
   
@@ -704,9 +695,23 @@ app.post('/api/game/select-digit', (req, res) => {
   // Check if both players have selected digits
   const allPlayersSelected = room.players.every(p => p.selectedDigits);
   if (allPlayersSelected && room.players.length === 2) {
-    room.gameState = 'SECRET_SETTING';
-    room.currentDigits = digits; // Use the selected digits
-    console.log('🎯 Both players selected digits, moving to SECRET_SETTING');
+    // Ensure both players selected the same number of digits
+    const player1Digits = room.players[0].selectedDigits;
+    const player2Digits = room.players[1].selectedDigits;
+    
+    if (player1Digits === player2Digits) {
+      room.gameState = 'SECRET_SETTING';
+      room.currentDigits = player1Digits; // Use the agreed-upon digits
+      console.log('🎯 Both players selected', player1Digits, 'digits, moving to SECRET_SETTING');
+    } else {
+      console.log('❌ Players selected different digits:', player1Digits, 'vs', player2Digits);
+      // Keep in DIGIT_SELECTION state until they agree
+      return res.status(400).json({
+        success: false,
+        error: `Both players must select the same number of digits. Player 1: ${player1Digits}, Player 2: ${player2Digits}`,
+        gameState: room.gameState
+      });
+    }
   }
   
   res.json({
