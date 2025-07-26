@@ -669,40 +669,47 @@ app.post('/api/game/opponent-secret', (req, res) => {
     return res.json({ success: false, error: 'Game not ready for opponent secret request' });
   }
   
-  // Find requester and opponent
+  // Find requester and the WINNER (not just any opponent)
   const requester = room.players.find(p => p.id === playerId);
-  const opponent = room.players.find(p => p.id !== playerId);
   
   if (!requester) {
     console.log('❌ Requester not found:', playerId);
     return res.json({ success: false, error: 'Player not found' });
   }
   
-  if (!opponent) {
-    console.log('❌ Opponent not found for player:', playerId);
-    return res.json({ success: false, error: 'Opponent not found' });
-  }
-  
-  // Verify requester is not the winner (only losers can request opponent secret)
+  // Verify requester is not the winner (only losers can request winner secret)
   if (room.winner && room.winner.playerId === playerId) {
     console.log('❌ Winner cannot request opponent secret:', playerId);
     return res.json({ success: false, error: 'Winner cannot request opponent secret' });
   }
   
-  // Check if opponent has a secret
-  if (!opponent.secret) {
-    console.log('❌ Opponent secret not available');
-    return res.json({ success: false, error: 'Opponent secret not available' });
+  // Find the WINNER's secret (this is what the loser needs to decode)
+  if (!room.winner) {
+    console.log('❌ No winner info available');
+    return res.json({ success: false, error: 'No winner information available' });
   }
   
-  console.log('✅ Returning opponent secret:', opponent.secret, 'for player:', playerId);
+  const winner = room.players.find(p => p.id === room.winner.playerId);
+  if (!winner) {
+    console.log('❌ Winner player not found:', room.winner.playerId);
+    return res.json({ success: false, error: 'Winner player not found' });
+  }
   
-  // Return opponent's secret
+  // Check if winner has a secret
+  if (!winner.secret) {
+    console.log('❌ Winner secret not available');
+    return res.json({ success: false, error: 'Winner secret not available' });
+  }
+  
+  console.log('✅ Returning WINNER secret:', winner.secret, 'to loser:', playerId);
+  console.log('🎯 DECODE TARGET: Winner was', room.winner.playerId, 'with secret', winner.secret);
+  
+  // Return WINNER's secret (this is what loser needs to decode)
   res.json({
     success: true,
-    opponentSecret: opponent.secret,
-    opponentPlayerId: opponent.id,
-    opponentPlayerName: opponent.playerName || opponent.name || `Player ${opponent.id.substring(0, 6)}`
+    opponentSecret: winner.secret,
+    opponentPlayerId: winner.id,
+    opponentPlayerName: winner.playerName || winner.name || `Player ${winner.id.substring(0, 6)}`
   });
 });
 
