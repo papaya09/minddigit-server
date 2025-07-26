@@ -536,22 +536,101 @@ app.post('/api/game/guess-local', (req, res) => {
         timestamp: new Date().toISOString()
     });
     
-    // Switch turn to opponent
-    room.currentTurn = opponent.id;
-    
-    console.log(`🔄 Turn switched to ${opponent.name} (${opponent.id})`);
-    
-    res.json({
-        success: true,
-        result: {
-            guess: parseInt(guess),
-            bulls: result.bulls,
-            cows: result.cows,
-            isCorrect: result.bulls === guess.length ? 1 : 0
-        },
-        currentTurn: room.currentTurn,
-        mode: 'test'
-    });
+    // Check for win condition
+    if (result.bulls === guess.length) {
+        // Player won!
+        room.gameState = 'FINISHED';
+        room.winner = {
+            playerId: playerId,
+            playerName: player.name,
+            timestamp: new Date().toISOString()
+        };
+        console.log(`🏆 Game finished! Winner: ${player.name} (${playerId})`);
+        
+        res.json({
+            success: true,
+            result: {
+                guess: parseInt(guess),
+                bulls: result.bulls,
+                cows: result.cows,
+                isCorrect: 1
+            },
+            gameState: 'FINISHED',
+            winner: room.winner,
+            mode: 'test'
+        });
+    } else {
+        // Switch turn to opponent
+        room.currentTurn = opponent.id;
+        
+        console.log(`🔄 Turn switched to ${opponent.name} (${opponent.id})`);
+        
+        res.json({
+            success: true,
+            result: {
+                guess: parseInt(guess),
+                bulls: result.bulls,
+                cows: result.cows,
+                isCorrect: 0
+            },
+            currentTurn: room.currentTurn,
+            mode: 'test'
+        });
+    }
+});
+
+// Get opponent secret for continue guessing mode
+app.post('/api/game/opponent-secret', (req, res) => {
+  const { roomId, playerId } = req.body;
+  console.log('🔍 Opponent secret requested by player:', playerId, 'in room:', roomId);
+  
+  const room = rooms[roomId];
+  if (!room) {
+    console.log('❌ Room not found:', roomId);
+    return res.status(404).json({ success: false, error: 'Room not found' });
+  }
+  
+  // Verify game is finished
+  if (room.gameState !== 'FINISHED') {
+    console.log('❌ Game not finished yet. Current state:', room.gameState);
+    return res.json({ success: false, error: 'Game not finished yet' });
+  }
+  
+  // Find requester and opponent
+  const requester = room.players.find(p => p.id === playerId);
+  const opponent = room.players.find(p => p.id !== playerId);
+  
+  if (!requester) {
+    console.log('❌ Requester not found:', playerId);
+    return res.json({ success: false, error: 'Player not found' });
+  }
+  
+  if (!opponent) {
+    console.log('❌ Opponent not found for player:', playerId);
+    return res.json({ success: false, error: 'Opponent not found' });
+  }
+  
+  // Verify requester is not the winner (only losers can request opponent secret)
+  if (room.winner && room.winner.playerId === playerId) {
+    console.log('❌ Winner cannot request opponent secret:', playerId);
+    return res.json({ success: false, error: 'Winner cannot request opponent secret' });
+  }
+  
+  // Check if opponent has a secret
+  if (!opponent.secret) {
+    console.log('❌ Opponent secret not available');
+    return res.json({ success: false, error: 'Opponent secret not available' });
+  }
+  
+  console.log('✅ Returning opponent secret:', opponent.secret, 'for player:', playerId);
+  
+  // Return opponent's secret
+  res.json({
+    success: true,
+    opponentSecret: opponent.secret,
+    opponentPlayerId: opponent.id,
+    opponentPlayerName: opponent.playerName || opponent.name || `Player ${opponent.id.substring(0, 6)}`
+  });
 });
 
 // Select digit (local)
