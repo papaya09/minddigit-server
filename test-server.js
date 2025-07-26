@@ -969,7 +969,16 @@ app.post('/api/game/leave-local', (req, res) => {
   });
 });
 
-// Fallback for missing endpoints
+// Start the server if running directly
+if (require.main === module) {
+  const PORT = process.env.PORT || 3001;
+  app.listen(PORT, () => {
+    console.log(`🚀 Test server running on port ${PORT}`);
+    console.log(`📡 Health check: http://localhost:${PORT}/api/health`);
+  });
+}
+
+// Fallback for missing endpoints (MUST be at the end)
 app.all('/api/*', (req, res) => {
   console.log('❓ Unknown endpoint:', req.method, req.path);
   res.json({
