@@ -570,6 +570,110 @@ app.post('/api/game/guess-local', (req, res) => {
     }
 });
 
+// Vote for continue guessing mode
+app.post('/api/game/vote-continue', (req, res) => {
+  const { roomId, playerId, vote } = req.body;
+  console.log('🗳️ Continue guessing vote:', { roomId, playerId, vote });
+  
+  if (!roomId || !playerId || typeof vote !== 'boolean') {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Missing roomId, playerId, or vote' 
+    });
+  }
+  
+  const room = rooms[roomId];
+  if (!room) {
+    return res.status(404).json({ success: false, error: 'Room not found' });
+  }
+  
+  // Verify game is finished
+  if (room.gameState !== 'FINISHED') {
+    return res.json({ success: false, error: 'Game not finished yet' });
+  }
+  
+  // Find player
+  const player = room.players.find(p => p.id === playerId);
+  if (!player) {
+    return res.json({ success: false, error: 'Player not found' });
+  }
+  
+  // Initialize voting if not exists
+  if (!room.continueVoting) {
+    room.continueVoting = {
+      votes: {},
+      votingComplete: false,
+      result: null,
+      timestamp: new Date().toISOString()
+    };
+  }
+  
+  // Store vote
+  room.continueVoting.votes[playerId] = vote;
+  console.log('✅ Vote recorded:', playerId, '→', vote);
+  
+  // Check if both players have voted
+  const allPlayerIds = room.players.map(p => p.id);
+  const votedPlayerIds = Object.keys(room.continueVoting.votes);
+  const allVoted = allPlayerIds.every(id => votedPlayerIds.includes(id));
+  
+  if (allVoted) {
+    // Process voting result
+    const votes = Object.values(room.continueVoting.votes);
+    const continueCount = votes.filter(v => v === true).length;
+    const shouldContinue = continueCount === 2; // Both must agree to continue
+    
+    room.continueVoting.votingComplete = true;
+    room.continueVoting.result = shouldContinue;
+    
+    if (shouldContinue) {
+      room.gameState = 'CONTINUE_GUESSING';
+      console.log('🎯 Both players voted to continue - entering continue guessing mode');
+    } else {
+      room.gameState = 'VOTING_COMPLETE';
+      console.log('🚪 Players voted to exit - game will end');
+    }
+  }
+  
+  res.json({
+    success: true,
+    vote: vote,
+    votingComplete: room.continueVoting.votingComplete,
+    result: room.continueVoting.result,
+    gameState: room.gameState,
+    allVotes: room.continueVoting.votes
+  });
+});
+
+// Get voting status
+app.get('/api/game/voting-status', (req, res) => {
+  const { roomId, playerId } = req.query;
+  
+  if (!roomId || !playerId) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Missing roomId or playerId' 
+    });
+  }
+  
+  const room = rooms[roomId];
+  if (!room) {
+    return res.status(404).json({ success: false, error: 'Room not found' });
+  }
+  
+  res.json({
+    success: true,
+    gameState: room.gameState,
+    continueVoting: room.continueVoting || {
+      votes: {},
+      votingComplete: false,
+      result: null
+    },
+    winner: room.winner,
+    isWinner: room.winner && room.winner.playerId === playerId
+  });
+});
+
 // Get opponent secret for continue guessing mode
 app.post('/api/game/opponent-secret', (req, res) => {
   const { roomId, playerId } = req.body;
